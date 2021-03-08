@@ -308,7 +308,7 @@ namespace SAND {
             GridGenerator::merge_triangulations(triangulation_temp,
                                                 triangulation, triangulation);
         }
-        triangulation.refine_global(5);
+        triangulation.refine_global(3);
 
         /*Set BCIDs   */
         for (const auto &cell : triangulation.active_cell_iterators()) {
