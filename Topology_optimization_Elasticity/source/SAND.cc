@@ -1,3 +1,23 @@
+/* ---------------------------------------------------------------------
+ *
+ * Copyright (C) 2021 by Justin O'Connor.
+ *
+ * This file is part of the deal.II library.
+ *
+ * The deal.II library is free software; you can use it, redistribute
+ * it, and/or modify it under the terms of the GNU Lesser General
+ * Public License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ * The full text of the license can be found in the file LICENSE.md at
+ * the top level directory of deal.II.
+ *
+ * ---------------------------------------------------------------------
+
+ *
+ * Author: Justin O'Connor, Colorado State University, 2021.
+ */
+
+
 #include <deal.II/base/quadrature_lib.h>
 #include <deal.II/base/function.h>
 #include <deal.II/base/tensor.h>
@@ -6,8 +26,6 @@
 #include <deal.II/lac/block_vector.h>
 #include <deal.II/lac/full_matrix.h>
 #include <deal.II/lac/block_sparse_matrix.h>
-#include <deal.II/lac/solver_cg.h>
-#include <deal.II/lac/precondition.h>
 #include <deal.II/lac/linear_operator.h>
 #include <deal.II/lac/packaged_operation.h>
 #include <deal.II/lac/sparse_direct.h>
@@ -29,21 +47,30 @@
 #include <deal.II/numerics/vector_tools.h>
 #include <deal.II/numerics/matrix_tools.h>
 #include <deal.II/numerics/data_out.h>
-#include <deal.II/numerics/error_estimator.h>
 
 #include <iostream>
 #include <fstream>
 #include <algorithm>
 
-///Above are fairly normal files to include.  I also use the sparse direct package, which requiresBLAS/LAPACK
-/// to  perform  a  direct  solve  while  I  work  on  a  fast  iterative  solver  for  this problem.
-/// Below is the main class for this problem.
-
+// Above are fairly normal files to include.  I also use the sparse
+// direct package, which requires BLAS/LAPACK to perform a direct
+// solve while I work on a fast iterative solver for this problem.
+//
+// Below is the main class for this problem. The majority of functions
+// follow the usual naming schemes of tutorial programs, though there
+// are a couple that have been broken out of what is usually called
+// the `setup_system()` function because of their length, and there
+// are also a number that deal with various aspects of the
+// optimization algorithm.
+//
+// As an added bonus, the program writes the computed design as an STL
+// file that one can, for example, send to a 3d printer.
 namespace SAND {
     using namespace dealii;
 
     template<int dim>
-    class SANDTopOpt {
+    class SANDTopOpt
+    {
     public:
         SANDTopOpt();
 
@@ -61,16 +88,13 @@ namespace SAND {
         setup_boundary_values();
 
         void
-        assemble_block_system(const double barrier_size);
+        assemble_system(const double barrier_size);
 
         void
         solve();
 
         std::pair<double,double>
         calculate_max_step_size(const BlockVector<double> &state, const BlockVector<double> &step, const double barrier_size) const;
-
-        void
-        output(const unsigned int j) const;
 
         void
         setup_filter_matrix();
@@ -91,21 +115,32 @@ namespace SAND {
         check_convergence(const BlockVector<double> &state,const double barrier_size);
 
         void
-        save_as_stl();
+        output_results(const unsigned int j) const;
 
+        void
+        write_as_stl();
+
+
+      // Most of the member variables are also standard. There are,
+      // however, a number of variables that are specifically related
+      // to the optimization algorithm (such the various scalar
+      // factors below) as well as the filter matrix to ensure that
+      // the design remains smooth.
+        Triangulation<dim> triangulation;
+        FESystem<dim> fe;
+        DoFHandler<dim> dof_handler;
+        AffineConstraints<double> constraints;
 
         BlockSparsityPattern sparsity_pattern;
         BlockSparseMatrix<double> system_matrix;
+      
         SparsityPattern filter_sparsity_pattern;
         SparseMatrix<double> filter_matrix;
+      
         BlockVector<double> linear_solution;
         BlockVector<double> system_rhs;
         BlockVector<double> nonlinear_solution;
-        Triangulation<dim> triangulation;
-        DoFHandler<dim> dof_handler;
-        AffineConstraints<double> constraints;
-        FESystem<dim> fe;
-        DynamicSparsityPattern filter_dsp;
+      
         const double density_ratio;
         const double density_penalty_exponent;
         const double filter_r;
@@ -122,13 +157,12 @@ namespace SAND {
 
     };
 
-    ///This problem initializes with a FESystem composed of 2×dim FE_Q(1) elements, and 7 FE_DGQ(0)  elements.
-    /// The  piecewise  constant  functions  are  for  density-related  variables,and displacement-related variables are assigned to the FE_Q(1) elements.
+    // This problem initializes with a FESystem composed of 2×dim FE_Q(1) elements, and 7 FE_DGQ(0)  elements.
+    // The  piecewise  constant  functions  are  for  density-related  variables,and displacement-related variables are assigned to the FE_Q(1) elements.
 
     template<int dim>
     SANDTopOpt<dim>::SANDTopOpt()
             :
-            dof_handler(triangulation),
             /*fe should have 1 FE_DGQ<dim>(0) element for density, dim FE_Q finite elements for displacement,
              * another dim FE_Q elements for the lagrange multiplier on the FE constraint, and 2 more FE_DGQ<dim>(0)
              * elements for the upper and lower bound constraints */
@@ -137,20 +171,20 @@ namespace SAND {
                FE_DGQ<dim>(0) ^ 1,
                (FESystem<dim>(FE_Q<dim>(1) ^ dim)) ^ 1,
                FE_DGQ<dim>(0) ^ 5),
+            dof_handler(triangulation),
             density_ratio (.5),
             density_penalty_exponent (3),
             filter_r (.25),
             penalty_multiplier (1)
     {
     }
-    ///A  function  used  once  at  the  beginning  of  the  program,  this  creates  a  matrix  H  so  that H* unfiltered density = filtered density
+    // A  function  used  once  at  the  beginning  of  the  program,  this  creates  a  matrix  H  so  that H* unfiltered density = filtered density
 
     template<int dim>
     void
     SANDTopOpt<dim>::setup_filter_matrix() {
-
-        filter_dsp.reinit(dof_handler.get_triangulation().n_active_cells(),
-                          dof_handler.get_triangulation().n_active_cells());
+        DynamicSparsityPattern filter_dsp(dof_handler.get_triangulation().n_active_cells(),
+                                          dof_handler.get_triangulation().n_active_cells());
         std::set<unsigned int> neighbor_ids;
         std::set<typename Triangulation<dim>::cell_iterator> cells_to_check;
         std::set<typename Triangulation<dim>::cell_iterator> cells_to_check_temp;
@@ -251,8 +285,8 @@ namespace SAND {
         std::cout << "filled in filter matrix" << std::endl;
     }
 
-    ///This triangulation matches the problem description in the introduction -
-    /// a 6-by-1 rectangle where a force will be applied in the top center.
+    // This triangulation matches the problem description in the introduction -
+    // a 6-by-1 rectangle where a force will be applied in the top center.
 
     template<int dim>
     void
@@ -314,9 +348,9 @@ namespace SAND {
 
     }
 
-///The  bottom  corners  are  kept  in  place  in  the  y  direction  -  the  bottom  left  also  in  the  x direction.
-/// Because deal.ii is formulated to enforce boundary conditions along regions of the boundary,
-/// we do this to ensure these BCs are only enforced at points.
+// The  bottom  corners  are  kept  in  place  in  the  y  direction  -  the  bottom  left  also  in  the  x direction.
+// Because deal.ii is formulated to enforce boundary conditions along regions of the boundary,
+// we do this to ensure these BCs are only enforced at points.
     template<int dim>
     void
     SANDTopOpt<dim>::setup_boundary_values() {
@@ -376,9 +410,9 @@ namespace SAND {
     }
 
 
-    ///This makes a giant 9-by-9 block matrix, and also sets up the necessary block vectors.  The
-    /// sparsity pattern for this matrix includes the sparsity pattern for the filter matrix. It also initializes
-    /// any block vectors we will use.
+    // This makes a giant 9-by-9 block matrix, and also sets up the necessary block vectors.  The
+    // sparsity pattern for this matrix includes the sparsity pattern for the filter matrix. It also initializes
+    // any block vectors we will use.
     template<int dim>
     void
     SANDTopOpt<dim>::setup_block_system() {
@@ -620,12 +654,12 @@ namespace SAND {
 
     }
 
-    ///This  is  where  the  magic  happens.   The  equations  describing  the newtons method for finding 0s in the KKT conditions are implemented here.
+    // This  is  where  the  magic  happens.   The  equations  describing  the newtons method for finding 0s in the KKT conditions are implemented here.
 
 
     template<int dim>
     void
-    SANDTopOpt<dim>::assemble_block_system(double barrier_size) {
+    SANDTopOpt<dim>::assemble_system(double barrier_size) {
         assemble_timer.start();
         const FEValuesExtractors::Scalar densities(0);
         const FEValuesExtractors::Vector displacements(1);
@@ -1085,7 +1119,7 @@ namespace SAND {
         assemble_timer.stop();
     }
 
-    ///A direct solver, for now. The complexity of the system means that an iterative solver algorithm will take some more work in the future.
+    // A direct solver, for now. The complexity of the system means that an iterative solver algorithm will take some more work in the future.
     template<int dim>
     void
     SANDTopOpt<dim>::solve() {
@@ -1101,7 +1135,7 @@ namespace SAND {
         solve_timer.stop();
     }
 
-    ///A binary search figures out the maximum step that meets the dual feasibility - that s>0 and z>0. The fraction to boundary increases as the barrier size decreases.
+    // A binary search figures out the maximum step that meets the dual feasibility - that s>0 and z>0. The fraction to boundary increases as the barrier size decreases.
 
     template<int dim>
     std::pair<double,double>
@@ -1164,7 +1198,7 @@ namespace SAND {
         return {step_size_s_low, step_size_z_low};
     }
 
-///Creates a rhs vector that we can use to look at the magnitude of the KKT conditions.  This is then used for testing the convergence before shrinking barrier size, as well as in the calculation of the l1 merit.
+// Creates a rhs vector that we can use to look at the magnitude of the KKT conditions.  This is then used for testing the convergence before shrinking barrier size, as well as in the calculation of the l1 merit.
 
     template<int dim>
     BlockVector<double>
@@ -1442,7 +1476,7 @@ namespace SAND {
     }
 
 
-/// I use an exact l1 merit function in my watchdog algorithm to determine steps. This calculates the exact l1 merit
+// I use an exact l1 merit function in my watchdog algorithm to determine steps. This calculates the exact l1 merit
     template<int dim>
     double
     SANDTopOpt<dim>::calculate_exact_merit(const BlockVector<double> &test_solution, const double barrier_size, const double /*penalty_parameter*/)
@@ -1537,14 +1571,14 @@ namespace SAND {
         return total_merit;
     }
 
-    ///This updates the penalty multiplier in the merit function, and then returns the largest scaled feasible step
+    // This updates the penalty multiplier in the merit function, and then returns the largest scaled feasible step
 
     template<int dim>
     BlockVector<double>
     SANDTopOpt<dim>::find_max_step(const BlockVector<double> &state,const double barrier_size)
     {
         nonlinear_solution = state;
-        assemble_block_system(barrier_size);
+        assemble_system(barrier_size);
         solve();
         const BlockVector<double> step = linear_solution;
 
@@ -1611,7 +1645,7 @@ namespace SAND {
         return max_step;
     }
 
-    ///This is my back-stepping algorithm for a line search - keeps shrinking step size until it finds a step where the merit is decreased.
+    // This is my back-stepping algorithm for a line search - keeps shrinking step size until it finds a step where the merit is decreased.
 
     template<int dim>
     BlockVector<double>
@@ -1636,7 +1670,7 @@ namespace SAND {
 
 
 
-    ///Checks to see if the KKT conditions are sufficiently met to lower barrier size.
+    // Checks to see if the KKT conditions are sufficiently met to lower barrier size.
     template<int dim>
     bool
     SANDTopOpt<dim>::check_convergence(const BlockVector<double> &state,  const double barrier_size)
@@ -1655,10 +1689,10 @@ namespace SAND {
     }
 
 
-    ///Outputs information in a VTK file
+    // Outputs information in a VTK file
     template<int dim>
     void
-    SANDTopOpt<dim>::output(const unsigned int j) const {
+    SANDTopOpt<dim>::output_results(const unsigned int j) const {
         std::vector<std::string> solution_names(1, "density");
         std::vector<DataComponentInterpretation::DataComponentInterpretation> data_component_interpretation(
                 1, DataComponentInterpretation::component_is_scalar);
@@ -1702,11 +1736,11 @@ namespace SAND {
     }
 
 
-    ///This outputs an .stl file for 3d printing the result! .stl files  made up of normal vectors and triangles.
-    /// The triangle nodes must go counter-clockwise when looking from the outside, which requires a few checks.
+    // This outputs an .stl file for 3d printing the result! .stl files  made up of normal vectors and triangles.
+    // The triangle nodes must go counter-clockwise when looking from the outside, which requires a few checks.
     template<int dim>
     void
-    SANDTopOpt<dim>::save_as_stl()
+    SANDTopOpt<dim>::write_as_stl()
     {
     std::ofstream stlfile;
     stlfile.open ("bridge.stl");
@@ -1867,7 +1901,7 @@ namespace SAND {
     }
 
 
-    ///Contains watchdog algorithm
+    // Contains watchdog algorithm
     template<int dim>
     void
     SANDTopOpt<dim>::run() {
@@ -1971,7 +2005,7 @@ namespace SAND {
                     }
                 }
                 //output current state
-                output(iteration_number);
+                output_results(iteration_number);
                 //check convergence
                 converged = check_convergence(current_state, barrier_size);
                 //end while
@@ -2011,7 +2045,7 @@ namespace SAND {
             //end while
         }
 
-        save_as_stl();
+        write_as_stl();
         big_timer.stop();
         std::cout << "overall time:  " << big_timer.cpu_time() << std::endl;
         std::cout << "setup time:  " << setup_timer.cpu_time() << std::endl;
