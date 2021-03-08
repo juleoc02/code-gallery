@@ -149,12 +149,7 @@ namespace SAND {
 
         std::map<types::global_dof_index, double> boundary_values;
 
-        Timer solve_timer;
-        Timer merit_function_timer;
-        Timer assemble_timer;
-        Timer setup_timer;
-        Timer big_timer;
-
+      TimerOutput timer;
     };
 
     // This problem initializes with a FESystem composed of 2×dim FE_Q(1) elements, and 7 FE_DGQ(0)  elements.
@@ -175,7 +170,10 @@ namespace SAND {
             density_ratio (.5),
             density_penalty_exponent (3),
             filter_r (.25),
-            penalty_multiplier (1)
+            penalty_multiplier (1),
+            timer(std::cout,
+                  TimerOutput::summary,
+                  TimerOutput::wall_times)
     {
     }
     // A  function  used  once  at  the  beginning  of  the  program,  this  creates  a  matrix  H  so  that H* unfiltered density = filtered density
@@ -660,7 +658,7 @@ namespace SAND {
     template<int dim>
     void
     SANDTopOpt<dim>::assemble_system(double barrier_size) {
-        assemble_timer.start();
+        TimerOutput::Scope t(timer, "assembly");
         const FEValuesExtractors::Scalar densities(0);
         const FEValuesExtractors::Vector displacements(1);
         const FEValuesExtractors::Scalar unfiltered_densities(1 + dim);
@@ -1116,23 +1114,20 @@ namespace SAND {
                 system_matrix.block(2, 4).add(j, i, value);
             }
         }
-        assemble_timer.stop();
     }
 
+
+  
     // A direct solver, for now. The complexity of the system means that an iterative solver algorithm will take some more work in the future.
     template<int dim>
     void
     SANDTopOpt<dim>::solve() {
-        //This broke everything. Unsure why.
-//      constraints.condense(system_matrix);
-//      constraints.condense(system_rhs);
-        solve_timer.start();
+        TimerOutput::Scope t(timer, "solver");
         SparseDirectUMFPACK A_direct;
         A_direct.initialize(system_matrix);
         A_direct.vmult(linear_solution, system_rhs);
 
         constraints.distribute(linear_solution);
-        solve_timer.stop();
     }
 
     // A binary search figures out the maximum step that meets the dual feasibility - that s>0 and z>0. The fraction to boundary increases as the barrier size decreases.
@@ -1481,8 +1476,7 @@ namespace SAND {
     double
     SANDTopOpt<dim>::calculate_exact_merit(const BlockVector<double> &test_solution, const double barrier_size, const double /*penalty_parameter*/)
     {
-        merit_function_timer.start();
-       //const double fraction_to_boundary = .995;
+       TimerOutput::Scope t(timer, "merit function");
 
        double objective_function_merit = 0;
        double elasticity_constraint_merit = 0;
@@ -1565,8 +1559,6 @@ namespace SAND {
         double total_merit;
 
         total_merit = objective_function_merit + elasticity_constraint_merit + filter_constraint_merit + lower_slack_merit + upper_slack_merit;
-
-        merit_function_timer.stop();
 
         return total_merit;
     }
@@ -1906,22 +1898,25 @@ namespace SAND {
     void
     SANDTopOpt<dim>::run() {
 
-        big_timer.start();
-        setup_timer.start();
+        {
+          TimerOutput::Scope t(timer, "setup");
+          
+          create_triangulation();
+          setup_block_system();
+          setup_boundary_values();
+          setup_filter_matrix();
+        }
+        
         double barrier_size = 25;
         const double min_barrier_size = .0005;
-        create_triangulation();
-        setup_block_system();
-        setup_boundary_values();
-        setup_filter_matrix();
-
+        
         const unsigned int max_uphill_steps = 8;
         unsigned int iteration_number = 0;
         const double descent_requirement = .0001;
         //while barrier value above minimal value and total iterations under some value
         BlockVector<double> current_state = nonlinear_solution;
         BlockVector<double> current_step;
-        setup_timer.stop();
+        
 
         while((barrier_size > .0005 || !check_convergence(current_state, barrier_size)) && iteration_number < 10000)
         {
@@ -2046,16 +2041,7 @@ namespace SAND {
         }
 
         write_as_stl();
-        big_timer.stop();
-        std::cout << "overall time:  " << big_timer.cpu_time() << std::endl;
-        std::cout << "setup time:  " << setup_timer.cpu_time() << std::endl;
-        std::cout << "solve time:  " << solve_timer.cpu_time() << std::endl;
-        std::cout << "assemble time:  " << assemble_timer.cpu_time() << std::endl;
-        std::cout << "merit finding time:  " << merit_function_timer.cpu_time() << std::endl;
-
-
-
-
+        timer.print_summary ();
     }
 
 } // namespace SAND
