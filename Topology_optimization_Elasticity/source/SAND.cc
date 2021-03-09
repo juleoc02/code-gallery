@@ -82,28 +82,27 @@ namespace SAND {
         create_triangulation();
 
         void
+        setup_boundary_values();
+
+        void
         setup_block_system();
 
         void
-        setup_boundary_values();
+        setup_filter_matrix();
 
         void
         assemble_system(const double barrier_size);
 
         void
         solve();
-
         std::pair<double,double>
         calculate_max_step_size(const BlockVector<double> &state, const BlockVector<double> &step, const double barrier_size) const;
 
-        void
-        setup_filter_matrix();
+        BlockVector<double>
+        calculate_test_rhs(const BlockVector<double> &test_solution, const double barrier_size, const double penalty_parameter) const;
 
         double
         calculate_exact_merit(const BlockVector<double> &test_solution, const double barrier_size, const double penalty_parameter);
-
-        BlockVector<double>
-        calculate_test_rhs(const BlockVector<double> &test_solution, const double barrier_size, const double penalty_parameter) const;
 
         BlockVector<double>
         find_max_step(const BlockVector<double> &state, const double barrier_size);
@@ -156,9 +155,11 @@ namespace SAND {
     // FESystem composed of 2×dim `FE_Q(1)` elements for the
     // displacement variable and its Lagrange multiplier, and 7
     // `FE_DGQ(0)` elements.  These piecewise constant functions are
-    // for density-related variables: the density itself, the slack
-    // variables for the lower and upper bounds on the density, and
-    // then Lagrange multipliers.
+    // for density-related variables: the density itself, the
+    // unfiltered density, the slack variables for the lower and upper
+    // bounds on the unfiltered density, and then Lagrange multipliers
+    // for the connection between filtered and unfiltered densities as
+    // well as for the inequality constraints.
     //
     // The order in which these elements appear is documented above.
     template<int dim>
@@ -177,123 +178,14 @@ namespace SAND {
             timer(std::cout,
                   TimerOutput::summary,
                   TimerOutput::wall_times)
-    {
-    }
+    {}
 
-  
-    // A  function  used  once  at  the  beginning  of  the  program,  this  creates  a  matrix  H  so  that H* unfiltered density = filtered density
-    template<int dim>
-    void
-    SANDTopOpt<dim>::setup_filter_matrix() {
-        DynamicSparsityPattern filter_dsp(dof_handler.get_triangulation().n_active_cells(),
-                                          dof_handler.get_triangulation().n_active_cells());
-        std::set<unsigned int> neighbor_ids;
-        std::set<typename Triangulation<dim>::cell_iterator> cells_to_check;
-        std::set<typename Triangulation<dim>::cell_iterator> cells_to_check_temp;
-        double distance;
 
-        /*finds neighbors-of-neighbors until it is out to specified radius*/
-        for (const auto &cell : dof_handler.active_cell_iterators()) {
-            const unsigned int i = cell->active_cell_index();
-            neighbor_ids = {i};
-            cells_to_check = {cell};
-            
-            unsigned int n_neighbors = 1;
-            while (true) {
-                cells_to_check_temp.clear();
-                for (auto check_cell : cells_to_check) {
-                    for (unsigned int n = 0;
-                         n < GeometryInfo<dim>::faces_per_cell; ++n) {
-                        if (!(check_cell->face(n)->at_boundary())) {
-                            distance = cell->center().distance(
-                                    check_cell->neighbor(n)->center());
-                            if ((distance < filter_r) &&
-                                !(neighbor_ids.count(check_cell->neighbor(n)->active_cell_index()))) {
-                                cells_to_check_temp.insert(check_cell->neighbor(n));
-                                neighbor_ids.insert(check_cell->neighbor(n)->active_cell_index());
-                            }
-                        }
-                    }
-                }
-
-                if (neighbor_ids.size() == n_neighbors) {
-                    break;
-                } else {
-                    cells_to_check = cells_to_check_temp;
-                    n_neighbors = neighbor_ids.size();
-                }
-            }
-/*add all of these to the sparsity pattern*/
-            for (auto j : neighbor_ids) {
-                filter_dsp.add(i, j);
-            }
-        }
-
-        filter_sparsity_pattern.copy_from(filter_dsp);
-        filter_matrix.reinit(filter_sparsity_pattern);
-
-/*find these cells again to add values to matrix*/
-        for (const auto &cell : dof_handler.active_cell_iterators()) {
-            const unsigned int i = cell->active_cell_index();
-            neighbor_ids = {i};
-            cells_to_check = {cell};
-            cells_to_check_temp = {};
-            
-            unsigned int n_neighbors = 1;
-            filter_matrix.add(i, i, filter_r);
-            while (true) {
-                cells_to_check_temp.clear();
-                for (auto check_cell : cells_to_check) {
-                    for (unsigned int n = 0; n < GeometryInfo<dim>::faces_per_cell; ++n) {
-                        if (!(check_cell->face(n)->at_boundary())) {
-                            distance = cell->center().distance(
-                                    check_cell->neighbor(n)->center());
-                            if ((distance < filter_r) && !(neighbor_ids.count(
-                                    check_cell->neighbor(n)->active_cell_index()))) {
-                                cells_to_check_temp.insert(
-                                        check_cell->neighbor(n));
-                                neighbor_ids.insert(
-                                        check_cell->neighbor(n)->active_cell_index());
-/*value should be max radius - distance between cells*/
-                                filter_matrix.add(i, check_cell->neighbor(n)->active_cell_index(),
-                                                  filter_r - distance);
-                            }
-                        }
-                    }
-                }
-
-                if (neighbor_ids.size() == n_neighbors) {
-                    break;
-                } else {
-                    cells_to_check = cells_to_check_temp;
-                    n_neighbors = neighbor_ids.size();
-                }
-            }
-        }
-
-        for (const auto &cell : dof_handler.active_cell_iterators()) {
-            const unsigned int i = cell->active_cell_index();
-            double denominator = 0;
-            typename SparseMatrix<double>::iterator iter = filter_matrix.begin(
-                    i);
-            for (; iter != filter_matrix.end(i); iter++) {
-                denominator = denominator + iter->value();
-            }
-            iter = filter_matrix.begin(i);
-            for (; iter != filter_matrix.end(i); iter++) {
-                iter->value() = iter->value() / denominator;
-            }
-        }
-        std::cout << "filled in filter matrix" << std::endl;
-    }
-
-    // This triangulation matches the problem description in the introduction -
-    // a 6-by-1 rectangle where a force will be applied in the top center.
-
+  // The first step then is to create the triangulation that matches the problem description in the introduction --
+    // a 6-by-1 rectangle where a point force will be applied in the top center.
     template<int dim>
     void
     SANDTopOpt<dim>::create_triangulation() {
-        /*Make a square*/
         Triangulation<dim> triangulation_temp;
         Point<dim> point_1, point_2;
         point_1(0) = 0;
@@ -655,6 +547,114 @@ namespace SAND {
         }
 
     }
+
+  
+    // A  function  used  once  at  the  beginning  of  the  program,  this  creates  a  matrix  H  so  that H* unfiltered density = filtered density
+    template<int dim>
+    void
+    SANDTopOpt<dim>::setup_filter_matrix() {
+        DynamicSparsityPattern filter_dsp(dof_handler.get_triangulation().n_active_cells(),
+                                          dof_handler.get_triangulation().n_active_cells());
+        std::set<unsigned int> neighbor_ids;
+        std::set<typename Triangulation<dim>::cell_iterator> cells_to_check;
+        std::set<typename Triangulation<dim>::cell_iterator> cells_to_check_temp;
+        double distance;
+
+        /*finds neighbors-of-neighbors until it is out to specified radius*/
+        for (const auto &cell : dof_handler.active_cell_iterators()) {
+            const unsigned int i = cell->active_cell_index();
+            neighbor_ids = {i};
+            cells_to_check = {cell};
+            
+            unsigned int n_neighbors = 1;
+            while (true) {
+                cells_to_check_temp.clear();
+                for (auto check_cell : cells_to_check) {
+                    for (unsigned int n = 0;
+                         n < GeometryInfo<dim>::faces_per_cell; ++n) {
+                        if (!(check_cell->face(n)->at_boundary())) {
+                            distance = cell->center().distance(
+                                    check_cell->neighbor(n)->center());
+                            if ((distance < filter_r) &&
+                                !(neighbor_ids.count(check_cell->neighbor(n)->active_cell_index()))) {
+                                cells_to_check_temp.insert(check_cell->neighbor(n));
+                                neighbor_ids.insert(check_cell->neighbor(n)->active_cell_index());
+                            }
+                        }
+                    }
+                }
+
+                if (neighbor_ids.size() == n_neighbors) {
+                    break;
+                } else {
+                    cells_to_check = cells_to_check_temp;
+                    n_neighbors = neighbor_ids.size();
+                }
+            }
+/*add all of these to the sparsity pattern*/
+            for (auto j : neighbor_ids) {
+                filter_dsp.add(i, j);
+            }
+        }
+
+        filter_sparsity_pattern.copy_from(filter_dsp);
+        filter_matrix.reinit(filter_sparsity_pattern);
+
+/*find these cells again to add values to matrix*/
+        for (const auto &cell : dof_handler.active_cell_iterators()) {
+            const unsigned int i = cell->active_cell_index();
+            neighbor_ids = {i};
+            cells_to_check = {cell};
+            cells_to_check_temp = {};
+            
+            unsigned int n_neighbors = 1;
+            filter_matrix.add(i, i, filter_r);
+            while (true) {
+                cells_to_check_temp.clear();
+                for (auto check_cell : cells_to_check) {
+                    for (unsigned int n = 0; n < GeometryInfo<dim>::faces_per_cell; ++n) {
+                        if (!(check_cell->face(n)->at_boundary())) {
+                            distance = cell->center().distance(
+                                    check_cell->neighbor(n)->center());
+                            if ((distance < filter_r) && !(neighbor_ids.count(
+                                    check_cell->neighbor(n)->active_cell_index()))) {
+                                cells_to_check_temp.insert(
+                                        check_cell->neighbor(n));
+                                neighbor_ids.insert(
+                                        check_cell->neighbor(n)->active_cell_index());
+/*value should be max radius - distance between cells*/
+                                filter_matrix.add(i, check_cell->neighbor(n)->active_cell_index(),
+                                                  filter_r - distance);
+                            }
+                        }
+                    }
+                }
+
+                if (neighbor_ids.size() == n_neighbors) {
+                    break;
+                } else {
+                    cells_to_check = cells_to_check_temp;
+                    n_neighbors = neighbor_ids.size();
+                }
+            }
+        }
+
+        for (const auto &cell : dof_handler.active_cell_iterators()) {
+            const unsigned int i = cell->active_cell_index();
+            double denominator = 0;
+            typename SparseMatrix<double>::iterator iter = filter_matrix.begin(
+                    i);
+            for (; iter != filter_matrix.end(i); iter++) {
+                denominator = denominator + iter->value();
+            }
+            iter = filter_matrix.begin(i);
+            for (; iter != filter_matrix.end(i); iter++) {
+                iter->value() = iter->value() / denominator;
+            }
+        }
+        std::cout << "filled in filter matrix" << std::endl;
+    }
+
 
     // This  is  where  the  magic  happens.   The  equations  describing  the newtons method for finding 0s in the KKT conditions are implemented here.
 
@@ -1901,7 +1901,6 @@ namespace SAND {
     template<int dim>
     void
     SANDTopOpt<dim>::run() {
-
         {
           TimerOutput::Scope t(timer, "setup");
           
@@ -2050,6 +2049,9 @@ namespace SAND {
 
 } // namespace SAND
 
+
+
+// The remainder of the code, the `main()` function, is as usual:
 int
 main() {
     try {
