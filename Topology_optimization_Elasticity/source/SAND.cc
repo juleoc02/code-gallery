@@ -235,18 +235,21 @@ namespace SAND {
         }
     }
 
-// The  bottom  corners  are  kept  in  place  in  the  y  direction  -  the  bottom  left  also  in  the  x direction.
-// Because deal.ii is formulated to enforce boundary conditions along regions of the boundary,
-// we do this to ensure these BCs are only enforced at points.
+
+  // Next, determine the constraints due to boundary values.  The
+  // bottom corners of the domain are kept in place in the $y$
+  // direction -- the bottom left also in the $x$ direction.  Because
+  // deal.ii is formulated to enforce boundary conditions along
+  // regions of the boundary, we do this to ensure these BCs are only
+  // enforced at points.
     template<int dim>
     void
     SANDTopOpt<dim>::setup_boundary_values() {
+      boundary_values.clear();
         for (const auto &cell : dof_handler.active_cell_iterators()) {
-            for (unsigned int face_number = 0;
-                 face_number < GeometryInfo<dim>::faces_per_cell;
-                 ++face_number) {
-                if (cell->face(face_number)->at_boundary()) {
-                    const auto center = cell->face(face_number)->center();
+          for (const auto &face : cell->face_iterators()) {
+                if (face->at_boundary()) {
+                    const auto center = face->center();
                     if (std::fabs(center(1) - 0) < 1e-12) {
 
                         for (unsigned int vertex_number = 0;
@@ -1062,13 +1065,9 @@ namespace SAND {
                 }
 
             }
-            for (unsigned int face_number = 0;
-                 face_number < GeometryInfo<dim>::faces_per_cell;
-                 ++face_number) {
-                if (cell->face(face_number)->at_boundary() && cell->face(
-                        face_number)->boundary_id()
-                                                              == 1) {
-                    fe_face_values.reinit(cell, face_number);
+            for (const auto &face : cell->face_iterators()) {
+                if (face->at_boundary() && face->boundary_id() == 1) {
+                    fe_face_values.reinit(cell, face);
 
                     for (unsigned int face_q_point = 0;
                          face_q_point < n_face_q_points; ++face_q_point) {
@@ -1429,13 +1428,9 @@ namespace SAND {
 
             }
 
-            for (unsigned int face_number = 0;
-                 face_number < GeometryInfo<dim>::faces_per_cell;
-                 ++face_number) {
-                if (cell->face(face_number)->at_boundary() && cell->face(
-                        face_number)->boundary_id()
-                                                              == 1) {
-                    fe_face_values.reinit(cell, face_number);
+            for (const auto &face : cell->face_iterators()) {
+                if (face->at_boundary() && face->boundary_id() == 1) {
+                    fe_face_values.reinit(cell, face);
 
                     for (unsigned int face_q_point = 0;
                          face_q_point < n_face_q_points; ++face_q_point) {
@@ -1504,13 +1499,10 @@ namespace SAND {
                 Tensor<1, dim> traction;
                 traction[1] = -1;
 
-                for (unsigned int face_number = 0;
-                     face_number < GeometryInfo<dim>::faces_per_cell;
-                     ++face_number) {
-                    if (cell->face(face_number)->at_boundary() && cell->face(
-                            face_number)->boundary_id()== 1)
+                for (const auto &face : cell->face_iterators()) {
+                    if (face->at_boundary() && face->boundary_id()== 1)
                     {
-                        fe_face_values.reinit(cell, face_number);
+                        fe_face_values.reinit(cell, face);
                         fe_face_values[displacements].get_function_values(test_solution,
                                                                           old_displacement_face_values);
                         for (unsigned int face_q_point = 0;
@@ -1819,9 +1811,7 @@ namespace SAND {
 
 
 
-                     for (unsigned int face_number = 0;
-                          face_number < GeometryInfo<dim>::faces_per_cell;
-                          ++face_number)
+                 for (const unsigned int face_number : cell->face_indices())
                      {
                          if ((cell->face(face_number)->at_boundary())
                              ||
@@ -1902,8 +1892,8 @@ namespace SAND {
           dof_handler.distribute_dofs(fe);
           DoFRenumbering::component_wise(dof_handler);
 
-          setup_block_system();
           setup_boundary_values();
+          setup_block_system();
           setup_filter_matrix();
         }
         
