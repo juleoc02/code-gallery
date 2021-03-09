@@ -186,24 +186,10 @@ namespace SAND {
     template<int dim>
     void
     SANDTopOpt<dim>::create_triangulation() {
-        Triangulation<dim> triangulation_temp;
-        Point<dim> point_1, point_2;
-        point_1(0) = 0;
-        point_1(1) = 0;
-        point_2(0) = 1;
-        point_2(1) = 1;
-        GridGenerator::hyper_rectangle(triangulation, point_1, point_2);
-
-        /*make 5 more squares*/
-        for (unsigned int n = 1; n < 6; n++) {
-            triangulation_temp.clear();
-            point_1(0) = n;
-            point_2(0) = n + 1;
-            GridGenerator::hyper_rectangle(triangulation_temp, point_1, point_2);
-            /*glue squares together*/
-            GridGenerator::merge_triangulations(triangulation_temp,
-                                                triangulation, triangulation);
-        }
+        GridGenerator::subdivided_hyper_rectangle (triangulation, 
+                                                   {6,1},
+                                                   Point<dim>(0,0),
+                                                   Point<dim>(6,1));
         triangulation.refine_global(3);
 
         /*Set BCIDs   */
