@@ -181,51 +181,58 @@ namespace SAND {
     {}
 
 
-  // The first step then is to create the triangulation that matches the problem description in the introduction --
-    // a 6-by-1 rectangle where a point force will be applied in the top center.
+    // The first step then is to create the triangulation that matches
+    // the problem description in the introduction -- a 6-by-1
+    // rectangle (or a 6-by-1-by-1 box in 3d) where a force will be
+    // applied in the top center. This triangulation is then uniformly
+    // refined a number of times.
+    //
+    // In contrast to nearly the entire rest of this program, this
+    // function specifically assumes that we are in 2d and will
+    // require changes if we wanted to move to 3d simulations. We
+    // ensure that nobody tries to accidentally run in 3d without such
+    // modifications through an assertion at the top of the function.
     template<int dim>
     void
     SANDTopOpt<dim>::create_triangulation() {
-        GridGenerator::subdivided_hyper_rectangle (triangulation, 
-                                                   {6,1},
-                                                   Point<dim>(0,0),
-                                                   Point<dim>(6,1));
-        triangulation.refine_global(3);
+      Assert (dim==2, ExcNotImplemented());
+      GridGenerator::subdivided_hyper_rectangle (triangulation, 
+                                                 {6,1},
+                                                 Point<dim>(0,0),
+                                                 Point<dim>(6,1));
+              
+      triangulation.refine_global(3);
 
-        /*Set BCIDs   */
+        // The second step is to apply boundary indicators to parts of
+        // the boundary. The following code assigns boundary
+        // indicators to the bottom, top, left, and right boundaries
+        // of the box, respectively. The center region of the top
+        // boundary is given a separate boundary indicator: This is
+        // where we will apply the down force.
         for (const auto &cell : triangulation.active_cell_iterators()) {
-            for (unsigned int face_number = 0;
-                 face_number < GeometryInfo<dim>::faces_per_cell;
-                 ++face_number) {
-                if (cell->face(face_number)->at_boundary()) {
-                    const auto center = cell->face(face_number)->center();
+          for (const auto &face : cell->face_iterators())
+            {
+                if (face->at_boundary()) {
+                    const auto center = face->center();
                     if (std::fabs(center(1) - 0) < 1e-12) {
-                        /*Boundary ID of 2 is the 0 neumann, so no external force*/
-                        cell->face(face_number)->set_boundary_id(2);
+                        face->set_boundary_id(2);
                     }
-                    if (std::fabs(center(1) - 1) < 1e-12) {
-                        /*Find top middle*/
+                    else if (std::fabs(center(1) - 1) < 1e-12) {
                         if ((std::fabs(center(0) - 3) < .1)) {
-                            /*downward force is boundary id of 1*/
-                            cell->face(face_number)->set_boundary_id(1);
+                            face->set_boundary_id(1);
                         } else {
-                            cell->face(face_number)->set_boundary_id(2);
+                            face->set_boundary_id(2);
                         }
                     }
-                    if (std::fabs(center(0) - 0) < 1e-12) {
-                        cell->face(face_number)->set_boundary_id(2);
+                    else if (std::fabs(center(0) - 0) < 1e-12) {
+                        face->set_boundary_id(2);
                     }
-                    if (std::fabs(center(0) - 6) < 1e-12) {
-                        cell->face(face_number)->set_boundary_id(2);
+                    else if (std::fabs(center(0) - 6) < 1e-12) {
+                        face->set_boundary_id(2);
                     }
                 }
             }
         }
-
-        dof_handler.distribute_dofs(fe);
-
-        DoFRenumbering::component_wise(dof_handler);
-
     }
 
 // The  bottom  corners  are  kept  in  place  in  the  y  direction  -  the  bottom  left  also  in  the  x direction.
@@ -1891,6 +1898,10 @@ namespace SAND {
           TimerOutput::Scope t(timer, "setup");
           
           create_triangulation();
+
+          dof_handler.distribute_dofs(fe);
+          DoFRenumbering::component_wise(dof_handler);
+
           setup_block_system();
           setup_boundary_values();
           setup_filter_matrix();
