@@ -109,10 +109,10 @@ namespace SAND {
         find_max_step(const BlockVector<double> &state, const double barrier_size);
 
         BlockVector<double>
-        take_scaled_step(const BlockVector<double> &state,const BlockVector<double> &step,const double descent_requirement,const double barrier_size);
+        take_scaled_step(const BlockVector<double> &state, const BlockVector<double> &step, const double descent_requirement,const double barrier_size);
 
         bool
-        check_convergence(const BlockVector<double> &state,const double barrier_size);
+        check_convergence(const BlockVector<double> &state, const double barrier_size);
 
         void
         output_results(const unsigned int j) const;
@@ -131,6 +131,8 @@ namespace SAND {
         DoFHandler<dim> dof_handler;
         AffineConstraints<double> constraints;
 
+        std::map<types::global_dof_index, double> boundary_values;
+      
         BlockSparsityPattern sparsity_pattern;
         BlockSparseMatrix<double> system_matrix;
       
@@ -147,20 +149,21 @@ namespace SAND {
         double penalty_multiplier;
 
 
-        std::map<types::global_dof_index, double> boundary_values;
-
-      TimerOutput timer;
+        TimerOutput timer;
     };
 
-    // This problem initializes with a FESystem composed of 2×dim FE_Q(1) elements, and 7 FE_DGQ(0)  elements.
-    // The  piecewise  constant  functions  are  for  density-related  variables,and displacement-related variables are assigned to the FE_Q(1) elements.
-
+    // This problem has quite a lot of variables. We initialize a
+    // FESystem composed of 2×dim `FE_Q(1)` elements for the
+    // displacement variable and its Lagrange multiplier, and 7
+    // `FE_DGQ(0)` elements.  These piecewise constant functions are
+    // for density-related variables: the density itself, the slack
+    // variables for the lower and upper bounds on the density, and
+    // then Lagrange multipliers.
+    //
+    // The order in which these elements appear is documented above.
     template<int dim>
     SANDTopOpt<dim>::SANDTopOpt()
             :
-            /*fe should have 1 FE_DGQ<dim>(0) element for density, dim FE_Q finite elements for displacement,
-             * another dim FE_Q elements for the lagrange multiplier on the FE constraint, and 2 more FE_DGQ<dim>(0)
-             * elements for the upper and lower bound constraints */
             fe(FE_DGQ<dim>(0) ^ 1,
                (FESystem<dim>(FE_Q<dim>(1) ^ dim)) ^ 1,
                FE_DGQ<dim>(0) ^ 1,
@@ -176,8 +179,9 @@ namespace SAND {
                   TimerOutput::wall_times)
     {
     }
-    // A  function  used  once  at  the  beginning  of  the  program,  this  creates  a  matrix  H  so  that H* unfiltered density = filtered density
 
+  
+    // A  function  used  once  at  the  beginning  of  the  program,  this  creates  a  matrix  H  so  that H* unfiltered density = filtered density
     template<int dim>
     void
     SANDTopOpt<dim>::setup_filter_matrix() {
