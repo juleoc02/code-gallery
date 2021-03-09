@@ -238,10 +238,15 @@ namespace SAND {
 
   // Next, determine the constraints due to boundary values.  The
   // bottom corners of the domain are kept in place in the $y$
-  // direction -- the bottom left also in the $x$ direction.  Because
-  // deal.ii is formulated to enforce boundary conditions along
-  // regions of the boundary, we do this to ensure these BCs are only
-  // enforced at points.
+  // direction -- the bottom left also in the $x$ direction. deal.II
+  // generally thinks of boundary values as attached to pieces of the
+  // boundary, i.e., faces, rather than individual vertices. Indeed,
+  // mathematically speaking, one can not assign boundary values to
+  // individual points for the infinite-dimensional partial
+  // differential equation. But, since we are trying to reproduce a
+  // widely used benchmark, we will do so anyway and keep in mind that
+  // we have a finite-dimensional problem for which imposing boundary
+  // conditions at a single node is valid.
     template<int dim>
     void
     SANDTopOpt<dim>::setup_boundary_values() {
@@ -250,16 +255,20 @@ namespace SAND {
           for (const auto &face : cell->face_iterators()) {
                 if (face->at_boundary()) {
                     const auto center = face->center();
+
+                    // Check whether the current face is on the bottom
+                    // boundary, and if it is whether one of its
+                    // vertices might be the bottom left or bottom
+                    // right vertex:
                     if (std::fabs(center(1) - 0) < 1e-12) {
 
                         for (unsigned int vertex_number = 0;
                              vertex_number < GeometryInfo<dim>::vertices_per_cell;
                              ++vertex_number) {
                             const auto vert = cell->vertex(vertex_number);
-                            /*Find bottom left corner*/
-                            if (std::fabs(vert(0) - 0) < 1e-12 && std::fabs(
-                                    vert(1) - 0) < 1e-12) {
 
+                            if (std::fabs(vert(0) - 0) < 1e-12 && std::fabs(vert(1) - 0) < 1e-12)
+                              {
                                 const unsigned int x_displacement =
                                         cell->vertex_dof_index(vertex_number, 0);
                                 const unsigned int y_displacement =
@@ -268,27 +277,19 @@ namespace SAND {
                                         cell->vertex_dof_index(vertex_number, 2);
                                 const unsigned int y_displacement_multiplier =
                                         cell->vertex_dof_index(vertex_number, 3);
-                                /*set bottom left BC*/
+                               
                                 boundary_values[x_displacement] = 0;
                                 boundary_values[y_displacement] = 0;
                                 boundary_values[x_displacement_multiplier] = 0;
                                 boundary_values[y_displacement_multiplier] = 0;
                             }
-                            /*Find bottom right corner*/
-                            if (std::fabs(vert(0) - 6) < 1e-12 && std::fabs(
-                                    vert(
-                                            1)
-                                    - 0)
-                                                                  < 1e-12) {
+                            
+                            else if (std::fabs(vert(0) - 6) < 1e-12 && std::fabs(vert(1)- 0) < 1e-12) {
                                 const unsigned int y_displacement =
                                         cell->vertex_dof_index(vertex_number, 1);
                                 const unsigned int y_displacement_multiplier =
                                         cell->vertex_dof_index(vertex_number, 3);
-                                // const unsigned int x_displacement =
-                                //         cell->vertex_dof_index(vertex_number, 0);
-                                // const unsigned int x_displacement_multiplier =
-                                //         cell->vertex_dof_index(vertex_number, 2);
-                                /*set bottom left BC*/
+
                                 boundary_values[y_displacement] = 0;
                                 boundary_values[y_displacement_multiplier] = 0;
                             }
@@ -300,17 +301,18 @@ namespace SAND {
     }
 
 
-    // This makes a giant 9-by-9 block matrix, and also sets up the necessary block vectors.  The
-    // sparsity pattern for this matrix includes the sparsity pattern for the filter matrix. It also initializes
-    // any block vectors we will use.
+    // The next function makes a giant 9-by-9 block matrix, and also
+    // sets up the necessary block vectors.  The sparsity pattern for
+    // this matrix includes the sparsity pattern for the filter
+    // matrix. It also initializes any block vectors we will use.
+    //
+    // Setting up the blocks by themselves is not overly complicated
+    // and follows what is already done in programs such as step-22,
+    // for example.
     template<int dim>
     void
     SANDTopOpt<dim>::setup_block_system() {
         const FEValuesExtractors::Scalar densities(0);
-
-        //MAKE n_u and n_P*****************************************************************
-
-        /*Setup 9 by 9 block matrix*/
 
         std::vector<unsigned int> block_component(9, 2);
         block_component[0] = 0;
@@ -324,20 +326,29 @@ namespace SAND {
         const std::vector<unsigned int> block_sizes = {n_p, n_u, n_p, n_u, n_p, n_p, n_p, n_p, n_p};
 
         BlockDynamicSparsityPattern dsp(9, 9);
-
-        for (unsigned int k = 0; k < 9; k++) {
-            for (unsigned int j = 0; j < 9; j++) {
+        for (unsigned int k = 0; k < 9; ++k)
+            for (unsigned int j = 0; j < 9; ++j)
                 dsp.block(j, k).reinit(block_sizes[j], block_sizes[k]);
-            }
-        }
-
         dsp.collect_sizes();
 
+
+        // The bulk of the function is in setting up which of these
+        // blocks will actually contain anything, i.e., which
+        // variables couple with which other variables. This is
+        // cumbersome but necessary to ensure that we don't just
+        // allocate a very large number of entries for our matrix that
+        // will then end up being zero.
+        //
+        // The concrete pattern you see below is something one
+        // probably has to draw once on a piece of paper, but follows
+        // in an otherwise relatively straightforward way from looking
+        // through the many terms of the bilinear form we will have to
+        // assemble in each nonlinear iteration:
         Table<2, DoFTools::Coupling> coupling(2 * dim + 7, 2 * dim + 7);
 
         coupling[0][0] = DoFTools::always;
 
-        for (unsigned int i = 0; i < dim; i++) {
+        for (unsigned int i = 0; i < dim; ++i) {
             coupling[0][1 + i] = DoFTools::always;
             coupling[1 + i][0] = DoFTools::always;
         }
@@ -345,7 +356,7 @@ namespace SAND {
         coupling[0][1 + dim] = DoFTools::none;
         coupling[1 + dim][0] = DoFTools::none;
 
-        for (unsigned int i = 0; i < dim; i++) {
+        for (unsigned int i = 0; i < dim; ++i) {
             coupling[0][2 + dim + i] = DoFTools::always;
             coupling[2 + dim + i][0] = DoFTools::always;
         }
@@ -362,32 +373,29 @@ namespace SAND {
         coupling[2 + 2 * dim + 2][0] = DoFTools::none;
         coupling[2 + 2 * dim + 3][0] = DoFTools::none;
         coupling[2 + 2 * dim + 4][0] = DoFTools::none;
+        
+        /* Coupling for displacement */
 
-
-
-
-//Coupling for displacement
-
-        for (unsigned int i = 0; i < dim; i++) {
-            for (unsigned int k = 0; k < dim; k++) {
+        for (unsigned int i = 0; i < dim; ++i) {
+            for (unsigned int k = 0; k < dim; ++k) {
                 coupling[1 + i][1 + k] = DoFTools::none;
             }
             coupling[1 + i][1 + dim ] = DoFTools::none;
             coupling[1 + dim ][1 + i] = DoFTools::none;
 
-            for (unsigned int k = 0; k < dim; k++) {
+            for (unsigned int k = 0; k < dim; ++k) {
                 coupling[1 + i][2 + dim + k] = DoFTools::always;
                 coupling[2 + dim + k][1 + i] = DoFTools::always;
             }
-            for (unsigned int k = 0; k < 5; k++) {
+            for (unsigned int k = 0; k < 5; ++k) {
                 coupling[1 + i][2 + 2 * dim + k] = DoFTools::none;
                 coupling[2 + 2 * dim + k][1 + i] = DoFTools::none;
             }
         }
 
-// coupling for unfiltered density
+        /* coupling for unfiltered density */
         coupling[1+dim][1+dim]= DoFTools::none;
-        for (unsigned int i = 0; i < dim; i++) {
+        for (unsigned int i = 0; i < dim; ++i) {
             coupling[1 + dim][2 + dim + i] = DoFTools::none;
             coupling[2 + dim + i][1 + dim] = DoFTools::none;
         }
@@ -401,15 +409,15 @@ namespace SAND {
         coupling[1 + dim][6 + 2 * dim] = DoFTools::always;
         coupling[6 + 2 * dim][1 + dim] = DoFTools::always;
 
-//Coupling for equality multipliers
-        for (unsigned int i = 0; i < dim + 1; i++) {
-            for (unsigned int k = 0; k < dim + 5; k++) {
+        /* Coupling for equality multipliers */
+        for (unsigned int i = 0; i < dim + 1; ++i) {
+            for (unsigned int k = 0; k < dim + 5; ++k) {
                 coupling[2 + dim + i][2 + dim + k] = DoFTools::none;
                 coupling[2 + dim + k][2 + dim + i] = DoFTools::none;
             }
         }
 
-//        Coupling for lower slack
+        /* Coupling for slack variables */
         coupling[3 + 2 * dim][3 + 2 * dim] = DoFTools::always;
         coupling[3 + 2 * dim][4 + 2 * dim] = DoFTools::none;
         coupling[4 + 2 * dim][3 + 2 * dim] = DoFTools::none;
@@ -417,67 +425,69 @@ namespace SAND {
         coupling[5 + 2 * dim][3 + 2 * dim] = DoFTools::always;
         coupling[3 + 2 * dim][6 + 2 * dim] = DoFTools::none;
         coupling[6 + 2 * dim][3 + 2 * dim] = DoFTools::none;
-
-//
+        
         coupling[4 + 2 * dim][4 + 2 * dim] = DoFTools::always;
         coupling[4 + 2 * dim][5 + 2 * dim] = DoFTools::none;
         coupling[5 + 2 * dim][4 + 2 * dim] = DoFTools::none;
         coupling[4 + 2 * dim][6 + 2 * dim] = DoFTools::always;
         coupling[6 + 2 * dim][4 + 2 * dim] = DoFTools::always;
 
-//
         coupling[5 + 2 * dim][5 + 2 * dim] = DoFTools::none;
         coupling[5 + 2 * dim][6 + 2 * dim] = DoFTools::none;
         coupling[6 + 2 * dim][5 + 2 * dim] = DoFTools::none;
         coupling[6 + 2 * dim][6 + 2 * dim] = DoFTools::none;
 
-        constraints.clear();
-
+        // Before we can create the sparsity pattern, we also have to
+        // set up constraints. Since this program does not adaptively
+        // refine the mesh, the only constraint we have is one that
+        // couples all density variables to enforce the volume
+        // constraint. This will ultimately lead to a dense sub-block
+        // of the matrix, but there is little we can do about that.
         const ComponentMask density_mask = fe.component_mask(densities);
-
         const IndexSet density_dofs = DoFTools::extract_dofs(dof_handler,
                                                        density_mask);
 
-
         const unsigned int last_density_dof = density_dofs.nth_index_in_set(density_dofs.n_elements() - 1);
+        constraints.clear();
         constraints.add_line(last_density_dof);
-        for (unsigned int i = 1;
-             i < density_dofs.n_elements(); ++i) {
+        for (unsigned int i = 1; i < density_dofs.n_elements(); ++i) 
             constraints.add_entry(last_density_dof,
                                   density_dofs.nth_index_in_set(i - 1), -1);
-        }
-
-
-      constraints.set_inhomogeneity (last_density_dof, 0);
+        constraints.set_inhomogeneity (last_density_dof, 0);
 
         constraints.close();
 
-//      DoFTools::make_sparsity_pattern (dof_handler, coupling, dsp, constraints,
-//          false);
-//changed it to below - works now?
+        // We can now finally create the sparsity pattern for the
+        // matrix, taking into account which variables couple with
+        // which other variables, and the constraints we have on the
+        // density.
+        DoFTools::make_sparsity_pattern(dof_handler, coupling, dsp, constraints);
 
-        DoFTools::make_sparsity_pattern(dof_handler, coupling,dsp, constraints);
+        // The only part of the matrix we have not dealt with is the
+        // filter matrix and its transpose. These are non-local
+        // (integral) operators for which deal.II does not currently
+        // have functions. What we will need to do is go over all
+        // cells and couple the unfiltered density on this cell to all
+        // filtered densities of neighboring cells that are less than
+        // a threshold distance away, and the other way around.
+        for (const auto &cell : dof_handler.active_cell_iterators())
+          {
+            const unsigned int i = cell->active_cell_index();
+            
+            std::set<unsigned int> neighbor_ids;
+            std::set<typename Triangulation<dim>::cell_iterator> cells_to_check;
 
-        std::set<unsigned int> neighbor_ids;
-        std::set<typename Triangulation<dim>::cell_iterator> cells_to_check;
-        std::set<typename Triangulation<dim>::cell_iterator> cells_to_check_temp;
-        unsigned int n_neighbors, i;
-        double distance;
-
-        for (const auto &cell : dof_handler.active_cell_iterators()) {
-            i = cell->active_cell_index();
-            neighbor_ids.clear();
             neighbor_ids.insert(i);
-            cells_to_check.clear();
             cells_to_check.insert(cell);
-            n_neighbors = 1;
+            
+            unsigned int n_neighbors = 1;
             while (true) {
-                cells_to_check_temp.clear();
+                std::set<typename Triangulation<dim>::cell_iterator> cells_to_check_temp;
                 for (auto check_cell : cells_to_check) {
                     for (unsigned int n = 0;
                          n < GeometryInfo<dim>::faces_per_cell; ++n) {
                         if (!(check_cell->face(n)->at_boundary())) {
-                            distance = cell->center().distance(
+                            const double distance = cell->center().distance(
                                     check_cell->neighbor(n)->center());
                             if ((distance < filter_r) &&
                                 !(neighbor_ids.count(check_cell->neighbor(n)->active_cell_index()))) {
@@ -495,18 +505,20 @@ namespace SAND {
                     n_neighbors = neighbor_ids.size();
                 }
             }
-/*add all of these to the sparsity pattern*/
-            for (auto j : neighbor_ids) {
+
+            for (const auto j : neighbor_ids) {
                 dsp.block(2, 4).add(i, j);
                 dsp.block(4, 2).add(i, j);
             }
         }
-//        constraints.condense(dsp);
-        sparsity_pattern.copy_from(dsp);
 
-//        This also breaks everything
-//        sparsity_pattern.block(4,2).copy_from( filter_sparsity_pattern);
-//        sparsity_pattern.block(2,4).copy_from( filter_sparsity_pattern);
+        // Having so generated the "dynamic" sparsity pattern, we can
+        // finally copy it to the structure that is used to associate
+        // matrices with a sparsity pattern. Because the sparsity
+        // pattern is large and complex, we also output it into a file
+        // of its own for visualization purposes -- in other words,
+        // for "visual debugging".
+        sparsity_pattern.copy_from(dsp);
 
         std::ofstream out("sparsity.plt");
         sparsity_pattern.print_gnuplot(out);
@@ -514,25 +526,18 @@ namespace SAND {
         system_matrix.reinit(sparsity_pattern);
 
 
-        linear_solution.reinit(9);
-        nonlinear_solution.reinit(9);
-        system_rhs.reinit(9);
+        // What is left is to correctly size the various vectors and
+        // their blocks, as well as setting initial guesses for some
+        // of the components of the (nonlinear) solution vector.
+        linear_solution.reinit(block_sizes);
+        nonlinear_solution.reinit(block_sizes);
+        system_rhs.reinit(block_sizes);
 
-        for (unsigned int j = 0; j < 9; j++) {
-            linear_solution.block(j).reinit(block_sizes[j]);
-            nonlinear_solution.block(j).reinit(block_sizes[j]);
-            system_rhs.block(j).reinit(block_sizes[j]);
-        }
-
-        linear_solution.collect_sizes();
-        nonlinear_solution.collect_sizes();
-        system_rhs.collect_sizes();
-
-        for (unsigned int k = 0; k < n_u; k++) {
+        for (unsigned int k = 0; k < n_u; ++k) {
             nonlinear_solution.block(1)[k] = 0;
             nonlinear_solution.block(3)[k] = 0;
         }
-        for (unsigned int k = 0; k < n_p; k++) {
+        for (unsigned int k = 0; k < n_p; ++k) {
             nonlinear_solution.block(0)[k] = density_ratio;
             nonlinear_solution.block(2)[k] = density_ratio;
             nonlinear_solution.block(4)[k] = density_ratio;
@@ -1159,7 +1164,7 @@ namespace SAND {
         double step_size_z_high = 1;
         double step_size_s, step_size_z;
 
-        for (unsigned int k = 0; k < 50; k++) {
+        for (unsigned int k = 0; k < 50; ++k) {
             step_size_s = (step_size_s_low + step_size_s_high) / 2;
             step_size_z = (step_size_z_low + step_size_z_high) / 2;
 
@@ -1573,9 +1578,9 @@ namespace SAND {
 
         const std::vector<unsigned int> equality_constraint_locations = {3, 4, 6, 8};
 
-        for(unsigned int i = 0; i<3; i++)
+        for(unsigned int i = 0; i<3; ++i)
         {
-            for(unsigned int j = 0; j<3; j++)
+            for(unsigned int j = 0; j<3; ++j)
             {
                 Vector<double> temp_vector;
                 temp_vector.reinit(step.block(decision_variable_locations[i]).size());
@@ -1585,7 +1590,7 @@ namespace SAND {
             grad_part = grad_part - system_rhs.block(decision_variable_locations[i])*step.block(decision_variable_locations[i]);
         }
 
-        for(unsigned int i = 0; i<4; i++)
+        for(unsigned int i = 0; i<4; ++i)
         {
             constraint_norm =   constraint_norm + system_rhs.block(equality_constraint_locations[i]).linfty_norm();
         }
@@ -1633,7 +1638,7 @@ namespace SAND {
     SANDTopOpt<dim>::take_scaled_step(const BlockVector<double> &state,const BlockVector<double> &max_step,const double descent_requirement, const double barrier_size)
     {
         double step_size = 1;
-            for(unsigned int k = 0; k<10; k++)
+            for(unsigned int k = 0; k<10; ++k)
             {
                 const double merit_derivative = (calculate_exact_merit(state + .0001 * max_step,barrier_size, 1) - calculate_exact_merit(state,barrier_size, 1))/.0001;
                 if(calculate_exact_merit(state + step_size * max_step,barrier_size, 1) <calculate_exact_merit(state,barrier_size, 1) + step_size * descent_requirement * merit_derivative )
@@ -1677,7 +1682,7 @@ namespace SAND {
         std::vector<std::string> solution_names(1, "density");
         std::vector<DataComponentInterpretation::DataComponentInterpretation> data_component_interpretation(
                 1, DataComponentInterpretation::component_is_scalar);
-        for (unsigned int i = 0; i < dim; i++) {
+        for (unsigned int i = 0; i < dim; ++i) {
             solution_names.emplace_back("displacement");
             data_component_interpretation.push_back(
                     DataComponentInterpretation::component_is_part_of_vector);
@@ -1685,7 +1690,7 @@ namespace SAND {
         solution_names.emplace_back("unfiltered_density");
         data_component_interpretation.push_back(
                 DataComponentInterpretation::component_is_scalar);
-        for (unsigned int i = 0; i < dim; i++) {
+        for (unsigned int i = 0; i < dim; ++i) {
             solution_names.emplace_back("displacement_multiplier");
             data_component_interpretation.push_back(
                     DataComponentInterpretation::component_is_part_of_vector);
@@ -1921,7 +1926,7 @@ namespace SAND {
                 BlockVector<double> watchdog_step;
                 double goal_merit;
                 //for 1-8 steps - this is the number of steps away we will let it go uphill before demanding downhill
-                for(unsigned int k = 0; k<max_uphill_steps; k++)
+                for(unsigned int k = 0; k<max_uphill_steps; ++k)
                 {
                     //compute step from current state  - function from kktSystem
                     current_step = find_max_step(current_state, barrier_size);
