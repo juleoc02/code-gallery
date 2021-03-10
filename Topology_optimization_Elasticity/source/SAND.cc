@@ -68,6 +68,43 @@
 namespace SAND {
     using namespace dealii;
 
+    template <int dim>
+    struct SolutionComponents
+    {
+    public:
+        static constexpr unsigned int density = 0;
+        static constexpr unsigned int displacement =1;
+        static constexpr unsigned int unfiltered_density = 1+dim;
+        static constexpr unsigned int displacement_multiplier = 2+dim;
+        static constexpr unsigned int unfiltered_density_multiplier = 2+2*dim;
+        static constexpr unsigned int density_lower_slack =  3+2*dim;
+        static constexpr unsigned int density_lower_slack_multiplier =  4+2*dim;
+        static constexpr unsigned int density_upper_slack =  5+2*dim;
+        static constexpr unsigned int density_upper_slack_multiplier =  6+2*dim;
+    };
+
+    struct SolutionBlocks
+    {
+    public:
+        static constexpr unsigned int density = 0;
+        static constexpr unsigned int displacement = 1;
+        static constexpr unsigned int unfiltered_density = 2;
+        static constexpr unsigned int displacement_multiplier = 3;
+        static constexpr unsigned int unfiltered_density_multiplier = 4;
+        static constexpr unsigned int density_lower_slack = 5;
+        static constexpr unsigned int density_lower_slack_multiplier = 6;
+        static constexpr unsigned int density_upper_slack = 7;
+        static constexpr unsigned int density_upper_slack_multiplier = 8;
+    };
+
+    struct BoundaryIds
+    {
+    public:
+        static constexpr types::boundary_id no_force = 101;
+        static constexpr types::boundary_id down_force = 102;
+        static constexpr types::boundary_id held_still = 103;
+    };
+
     template<int dim>
     class SANDTopOpt
     {
@@ -215,20 +252,20 @@ namespace SAND {
                 if (face->at_boundary()) {
                     const auto center = face->center();
                     if (std::fabs(center(1) - 0) < 1e-12) {
-                        face->set_boundary_id(2);
+                        face->set_boundary_id(BoundaryIds::no_force);
                     }
                     else if (std::fabs(center(1) - 1) < 1e-12) {
                         if ((std::fabs(center(0) - 3) < .1)) {
-                            face->set_boundary_id(1);
+                            face->set_boundary_id(BoundaryIds::down_force);
                         } else {
-                            face->set_boundary_id(2);
+                            face->set_boundary_id(BoundaryIds::no_force);
                         }
                     }
                     else if (std::fabs(center(0) - 0) < 1e-12) {
-                        face->set_boundary_id(2);
+                        face->set_boundary_id(BoundaryIds::no_force);
                     }
                     else if (std::fabs(center(0) - 6) < 1e-12) {
-                        face->set_boundary_id(2);
+                        face->set_boundary_id(BoundaryIds::no_force);
                     }
                 }
             }
@@ -312,7 +349,7 @@ namespace SAND {
     template<int dim>
     void
     SANDTopOpt<dim>::setup_block_system() {
-        const FEValuesExtractors::Scalar densities(0);
+        const FEValuesExtractors::Scalar densities(SolutionComponents<dim>::density);
 
         std::vector<unsigned int> block_component(9, 2);
         block_component[0] = 0;
@@ -322,7 +359,6 @@ namespace SAND {
 
         const unsigned int n_p = dofs_per_block[0];
         const unsigned int n_u = dofs_per_block[1];
-        std::cout << "n_p:  " << n_p << "   n_u   " << n_u << std::endl;
         const std::vector<unsigned int> block_sizes = {n_p, n_u, n_p, n_u, n_p, n_p, n_p, n_p, n_p};
 
         BlockDynamicSparsityPattern dsp(9, 9);
@@ -346,96 +382,123 @@ namespace SAND {
         // assemble in each nonlinear iteration:
         Table<2, DoFTools::Coupling> coupling(2 * dim + 7, 2 * dim + 7);
 
-        coupling[0][0] = DoFTools::always;
+        coupling[SolutionComponents<dim>::density][SolutionComponents<dim>::density] = DoFTools::always;
 
         for (unsigned int i = 0; i < dim; ++i) {
-            coupling[0][1 + i] = DoFTools::always;
-            coupling[1 + i][0] = DoFTools::always;
+            coupling[SolutionComponents<dim>::density][SolutionComponents<dim>::displacement + i] = DoFTools::always;
+            coupling[SolutionComponents<dim>::displacement + i][SolutionComponents<dim>::density] = DoFTools::always;
         }
 
-        coupling[0][1 + dim] = DoFTools::none;
-        coupling[1 + dim][0] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density][SolutionComponents<dim>::unfiltered_density] = DoFTools::none;
+        coupling[SolutionComponents<dim>::unfiltered_density][SolutionComponents<dim>::density] = DoFTools::none;
 
         for (unsigned int i = 0; i < dim; ++i) {
-            coupling[0][2 + dim + i] = DoFTools::always;
-            coupling[2 + dim + i][0] = DoFTools::always;
+            coupling[SolutionComponents<dim>::density][SolutionComponents<dim>::displacement_multiplier + i] = DoFTools::always;
+            coupling[SolutionComponents<dim>::displacement_multiplier + i][SolutionComponents<dim>::density] = DoFTools::always;
         }
 
-        coupling[0][2 + 2 * dim] = DoFTools::always;
-        coupling[2 + 2 * dim][0] = DoFTools::always;
+        coupling[SolutionComponents<dim>::density][SolutionComponents<dim>::unfiltered_density_multiplier] = DoFTools::always;
+        coupling[SolutionComponents<dim>::unfiltered_density_multiplier][SolutionComponents<dim>::density] = DoFTools::always;
 
 
-        coupling[0][2 + 2 * dim + 1] = DoFTools::none;
-        coupling[0][2 + 2 * dim + 2] = DoFTools::none;
-        coupling[0][2 + 2 * dim + 3] = DoFTools::none;
-        coupling[0][2 + 2 * dim + 4] = DoFTools::none;
-        coupling[2 + 2 * dim + 1][0] = DoFTools::none;
-        coupling[2 + 2 * dim + 2][0] = DoFTools::none;
-        coupling[2 + 2 * dim + 3][0] = DoFTools::none;
-        coupling[2 + 2 * dim + 4][0] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density][SolutionComponents<dim>::density_lower_slack] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density][SolutionComponents<dim>::density_lower_slack_multiplier] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density][SolutionComponents<dim>::density_upper_slack] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density][SolutionComponents<dim>::density_upper_slack_multiplier] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density_lower_slack][SolutionComponents<dim>::density] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density_lower_slack_multiplier][SolutionComponents<dim>::density] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density_upper_slack][SolutionComponents<dim>::density] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density_upper_slack_multiplier][SolutionComponents<dim>::density] = DoFTools::none;
         
         /* Coupling for displacement */
 
         for (unsigned int i = 0; i < dim; ++i) {
             for (unsigned int k = 0; k < dim; ++k) {
-                coupling[1 + i][1 + k] = DoFTools::none;
+                coupling[SolutionComponents<dim>::displacement + i][SolutionComponents<dim>::displacement + k] = DoFTools::none;
             }
-            coupling[1 + i][1 + dim ] = DoFTools::none;
-            coupling[1 + dim ][1 + i] = DoFTools::none;
+            coupling[SolutionComponents<dim>::displacement + i][SolutionComponents<dim>::unfiltered_density] = DoFTools::none;
+            coupling[SolutionComponents<dim>::unfiltered_density][SolutionComponents<dim>::displacement + i] = DoFTools::none;
 
             for (unsigned int k = 0; k < dim; ++k) {
-                coupling[1 + i][2 + dim + k] = DoFTools::always;
-                coupling[2 + dim + k][1 + i] = DoFTools::always;
+                coupling[SolutionComponents<dim>::displacement + i][SolutionComponents<dim>::displacement_multiplier + k] = DoFTools::always;
+                coupling[SolutionComponents<dim>::displacement_multiplier+ k][SolutionComponents<dim>::displacement + i] = DoFTools::always;
             }
-            for (unsigned int k = 0; k < 5; ++k) {
-                coupling[1 + i][2 + 2 * dim + k] = DoFTools::none;
-                coupling[2 + 2 * dim + k][1 + i] = DoFTools::none;
-            }
+
+            coupling[SolutionComponents<dim>::displacement + i][SolutionComponents<dim>::unfiltered_density_multiplier] = DoFTools::none;
+            coupling[SolutionComponents<dim>::displacement + i][SolutionComponents<dim>::density_lower_slack] = DoFTools::none;
+            coupling[SolutionComponents<dim>::displacement + i][SolutionComponents<dim>::density_lower_slack_multiplier] = DoFTools::none;
+            coupling[SolutionComponents<dim>::displacement + i][SolutionComponents<dim>::density_upper_slack] = DoFTools::none;
+            coupling[SolutionComponents<dim>::displacement + i][SolutionComponents<dim>::density_upper_slack_multiplier] = DoFTools::none;
+
+            coupling[SolutionComponents<dim>::unfiltered_density_multiplier][SolutionComponents<dim>::displacement + i] = DoFTools::none;
+            coupling[SolutionComponents<dim>::density_lower_slack][SolutionComponents<dim>::displacement + i] = DoFTools::none;
+            coupling[SolutionComponents<dim>::density_lower_slack_multiplier][SolutionComponents<dim>::displacement + i] = DoFTools::none;
+            coupling[SolutionComponents<dim>::density_upper_slack][SolutionComponents<dim>::displacement + i] = DoFTools::none;
+            coupling[SolutionComponents<dim>::density_upper_slack_multiplier][SolutionComponents<dim>::displacement + i] = DoFTools::none;
+
         }
 
         /* coupling for unfiltered density */
-        coupling[1+dim][1+dim]= DoFTools::none;
+        coupling[SolutionComponents<dim>::unfiltered_density][SolutionComponents<dim>::unfiltered_density]= DoFTools::none;
         for (unsigned int i = 0; i < dim; ++i) {
-            coupling[1 + dim][2 + dim + i] = DoFTools::none;
-            coupling[2 + dim + i][1 + dim] = DoFTools::none;
+            coupling[SolutionComponents<dim>::unfiltered_density][SolutionComponents<dim>::displacement_multiplier + i] = DoFTools::none;
+            coupling[SolutionComponents<dim>::displacement_multiplier + i][SolutionComponents<dim>::unfiltered_density] = DoFTools::none;
         }
 
-        coupling[1 + dim][3 + 2 * dim] = DoFTools::none;
-        coupling[3 + 2 * dim][1 + dim] = DoFTools::none;
-        coupling[1 + dim][4 + 2 * dim] = DoFTools::none;
-        coupling[4 + 2 * dim][1 + dim] = DoFTools::none;
-        coupling[1 + dim][5 + 2 * dim] = DoFTools::always;
-        coupling[5 + 2 * dim][1 + dim] = DoFTools::always;
-        coupling[1 + dim][6 + 2 * dim] = DoFTools::always;
-        coupling[6 + 2 * dim][1 + dim] = DoFTools::always;
+        coupling[SolutionComponents<dim>::unfiltered_density][3 + 2 * dim] = DoFTools::none;
+        coupling[3 + 2 * dim][SolutionComponents<dim>::unfiltered_density] = DoFTools::none;
+        coupling[SolutionComponents<dim>::unfiltered_density][4 + 2 * dim] = DoFTools::none;
+        coupling[4 + 2 * dim][SolutionComponents<dim>::unfiltered_density] = DoFTools::none;
+        coupling[SolutionComponents<dim>::unfiltered_density][5 + 2 * dim] = DoFTools::always;
+        coupling[5 + 2 * dim][SolutionComponents<dim>::unfiltered_density] = DoFTools::always;
+        coupling[SolutionComponents<dim>::unfiltered_density][6 + 2 * dim] = DoFTools::always;
+        coupling[6 + 2 * dim][SolutionComponents<dim>::unfiltered_density] = DoFTools::always;
 
         /* Coupling for equality multipliers */
-        for (unsigned int i = 0; i < dim + 1; ++i) {
-            for (unsigned int k = 0; k < dim + 5; ++k) {
-                coupling[2 + dim + i][2 + dim + k] = DoFTools::none;
-                coupling[2 + dim + k][2 + dim + i] = DoFTools::none;
+        for (unsigned int i = 0; i < dim; ++i)
+        {
+            for (unsigned int k = 0; k < dim; ++k)
+            {
+                coupling[SolutionComponents<dim>::displacement_multiplier +i][SolutionComponents<dim>::displacement_multiplier + k] = DoFTools::none;
             }
+            coupling[SolutionComponents<dim>::displacement_multiplier +i][SolutionComponents<dim>::unfiltered_density_multiplier] = DoFTools::none;
+            coupling[SolutionComponents<dim>::unfiltered_density_multiplier][SolutionComponents<dim>::displacement_multiplier +i] = DoFTools::none;
+
+            coupling[SolutionComponents<dim>::displacement_multiplier +i][SolutionComponents<dim>::density_lower_slack] = DoFTools::none;
+            coupling[SolutionComponents<dim>::displacement_multiplier +i][SolutionComponents<dim>::density_lower_slack_multiplier] = DoFTools::none;
+            coupling[SolutionComponents<dim>::displacement_multiplier +i][SolutionComponents<dim>::density_upper_slack] = DoFTools::none;
+            coupling[SolutionComponents<dim>::displacement_multiplier +i][SolutionComponents<dim>::density_upper_slack_multiplier] = DoFTools::none;
+
+            coupling[SolutionComponents<dim>::density_lower_slack][SolutionComponents<dim>::displacement_multiplier +i] = DoFTools::none;
+            coupling[SolutionComponents<dim>::density_lower_slack_multiplier][SolutionComponents<dim>::displacement_multiplier +i] = DoFTools::none;
+            coupling[SolutionComponents<dim>::density_upper_slack][SolutionComponents<dim>::displacement_multiplier +i] = DoFTools::none;
+            coupling[SolutionComponents<dim>::density_upper_slack_multiplier][SolutionComponents<dim>::displacement_multiplier +i] = DoFTools::none;
         }
 
-        /* Coupling for slack variables */
-        coupling[3 + 2 * dim][3 + 2 * dim] = DoFTools::always;
-        coupling[3 + 2 * dim][4 + 2 * dim] = DoFTools::none;
-        coupling[4 + 2 * dim][3 + 2 * dim] = DoFTools::none;
-        coupling[3 + 2 * dim][5 + 2 * dim] = DoFTools::always;
-        coupling[5 + 2 * dim][3 + 2 * dim] = DoFTools::always;
-        coupling[3 + 2 * dim][6 + 2 * dim] = DoFTools::none;
-        coupling[6 + 2 * dim][3 + 2 * dim] = DoFTools::none;
-        
-        coupling[4 + 2 * dim][4 + 2 * dim] = DoFTools::always;
-        coupling[4 + 2 * dim][5 + 2 * dim] = DoFTools::none;
-        coupling[5 + 2 * dim][4 + 2 * dim] = DoFTools::none;
-        coupling[4 + 2 * dim][6 + 2 * dim] = DoFTools::always;
-        coupling[6 + 2 * dim][4 + 2 * dim] = DoFTools::always;
 
-        coupling[5 + 2 * dim][5 + 2 * dim] = DoFTools::none;
-        coupling[5 + 2 * dim][6 + 2 * dim] = DoFTools::none;
-        coupling[6 + 2 * dim][5 + 2 * dim] = DoFTools::none;
-        coupling[6 + 2 * dim][6 + 2 * dim] = DoFTools::none;
+
+
+
+        /* Coupling for slack variables */
+        coupling[SolutionComponents<dim>::density_lower_slack][SolutionComponents<dim>::density_lower_slack] = DoFTools::always;
+        coupling[SolutionComponents<dim>::density_lower_slack][SolutionComponents<dim>::density_lower_slack_multiplier] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density_lower_slack][SolutionComponents<dim>::density_upper_slack] = DoFTools::always;
+        coupling[SolutionComponents<dim>::density_lower_slack][SolutionComponents<dim>::density_upper_slack_multiplier] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density_lower_slack_multiplier][SolutionComponents<dim>::density_lower_slack] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density_upper_slack][SolutionComponents<dim>::density_lower_slack] = DoFTools::always;
+        coupling[SolutionComponents<dim>::density_upper_slack_multiplier][SolutionComponents<dim>::density_lower_slack] = DoFTools::none;
+        
+        coupling[SolutionComponents<dim>::density_lower_slack_multiplier][SolutionComponents<dim>::density_lower_slack_multiplier] = DoFTools::always;
+        coupling[SolutionComponents<dim>::density_lower_slack_multiplier][SolutionComponents<dim>::density_upper_slack] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density_lower_slack_multiplier][SolutionComponents<dim>::density_upper_slack_multiplier] = DoFTools::always;
+        coupling[SolutionComponents<dim>::density_upper_slack][SolutionComponents<dim>::density_lower_slack_multiplier] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density_upper_slack_multiplier][SolutionComponents<dim>::density_lower_slack_multiplier] = DoFTools::always;
+
+        coupling[SolutionComponents<dim>::density_upper_slack][SolutionComponents<dim>::density_upper_slack] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density_upper_slack][SolutionComponents<dim>::density_upper_slack_multiplier] = DoFTools::none;
+        coupling[SolutionComponents<dim>::density_upper_slack_multiplier][SolutionComponents<dim>::density_upper_slack] = DoFTools::none;
+
+        coupling[SolutionComponents<dim>::density_upper_slack_multiplier][SolutionComponents<dim>::density_upper_slack_multiplier] = DoFTools::none;
 
         // Before we can create the sparsity pattern, we also have to
         // set up constraints. Since this program does not adaptively
@@ -507,8 +570,8 @@ namespace SAND {
             }
 
             for (const auto j : neighbor_ids) {
-                dsp.block(2, 4).add(i, j);
-                dsp.block(4, 2).add(i, j);
+                dsp.block(SolutionBlocks::unfiltered_density, SolutionBlocks::unfiltered_density_multiplier).add(i, j);
+                dsp.block(SolutionBlocks::unfiltered_density_multiplier, SolutionBlocks::unfiltered_density).add(i, j);
             }
         }
 
@@ -534,23 +597,24 @@ namespace SAND {
         system_rhs.reinit(block_sizes);
 
         for (unsigned int k = 0; k < n_u; ++k) {
-            nonlinear_solution.block(1)[k] = 0;
-            nonlinear_solution.block(3)[k] = 0;
+            nonlinear_solution.block(SolutionBlocks::displacement)[k] = 0;
+            nonlinear_solution.block(SolutionBlocks::displacement_multiplier)[k] = 0;
         }
         for (unsigned int k = 0; k < n_p; ++k) {
-            nonlinear_solution.block(0)[k] = density_ratio;
-            nonlinear_solution.block(2)[k] = density_ratio;
-            nonlinear_solution.block(4)[k] = density_ratio;
-            nonlinear_solution.block(5)[k] = density_ratio;
-            nonlinear_solution.block(6)[k] = 50;
-            nonlinear_solution.block(7)[k] = 1 - density_ratio;
-            nonlinear_solution.block(8)[k] = 50;
+            nonlinear_solution.block(SolutionBlocks::density)[k] = density_ratio;
+            nonlinear_solution.block(SolutionBlocks::unfiltered_density)[k] = density_ratio;
+            nonlinear_solution.block(SolutionBlocks::unfiltered_density_multiplier)[k] = density_ratio;
+            nonlinear_solution.block(SolutionBlocks::density_lower_slack)[k] = density_ratio;
+            nonlinear_solution.block(SolutionBlocks::density_lower_slack_multiplier)[k] = 50;
+            nonlinear_solution.block(SolutionBlocks::density_upper_slack)[k] = 1 - density_ratio;
+            nonlinear_solution.block(SolutionBlocks::density_upper_slack_multiplier)[k] = 50;
         }
 
     }
 
   
-    // A  function  used  once  at  the  beginning  of  the  program,  this  creates  a  matrix  H  so  that H* unfiltered density = filtered density
+    // A  function  used  once  at  the  beginning  of  the  program,  this  creates  a  matrix  H  so  that H* unfiltered density = filtered density.
+    // The creation of this matrix is non-trivial, and it is used in every iteration, and so rather than reforming it, it is made and stored separately.
     template<int dim>
     void
     SANDTopOpt<dim>::setup_filter_matrix() {
@@ -664,17 +728,15 @@ namespace SAND {
     void
     SANDTopOpt<dim>::assemble_system(double barrier_size) {
         TimerOutput::Scope t(timer, "assembly");
-        const FEValuesExtractors::Scalar densities(0);
-        const FEValuesExtractors::Vector displacements(1);
-        const FEValuesExtractors::Scalar unfiltered_densities(1 + dim);
-        const FEValuesExtractors::Vector displacement_multipliers(2 + dim);
-        const FEValuesExtractors::Scalar unfiltered_density_multipliers(2 + 2 * dim);
-        const FEValuesExtractors::Scalar density_lower_slacks(3 + 2 * dim);
-        const FEValuesExtractors::Scalar density_lower_slack_multipliers(
-                4 + 2 * dim);
-        const FEValuesExtractors::Scalar density_upper_slacks(5 + 2 * dim);
-        const FEValuesExtractors::Scalar density_upper_slack_multipliers(
-                6 + 2 * dim);
+        const FEValuesExtractors::Scalar densities(SolutionComponents<dim>::density);
+        const FEValuesExtractors::Vector displacements(SolutionComponents<dim>::displacement);
+        const FEValuesExtractors::Scalar unfiltered_densities(SolutionComponents<dim>::unfiltered_density);
+        const FEValuesExtractors::Vector displacement_multipliers(SolutionComponents<dim>::displacement_multiplier);
+        const FEValuesExtractors::Scalar unfiltered_density_multipliers(SolutionComponents<dim>::unfiltered_density_multiplier);
+        const FEValuesExtractors::Scalar density_lower_slacks(SolutionComponents<dim>::density_lower_slack);
+        const FEValuesExtractors::Scalar density_lower_slack_multipliers(SolutionComponents<dim>::density_lower_slack_multiplier);
+        const FEValuesExtractors::Scalar density_upper_slacks(SolutionComponents<dim>::density_upper_slack);
+        const FEValuesExtractors::Scalar density_upper_slack_multipliers(SolutionComponents<dim>::density_upper_slack_multiplier);
 
         /*Remove any values from old iterations*/
         system_matrix.reinit(sparsity_pattern);
@@ -711,12 +773,12 @@ namespace SAND {
 
         BlockVector<double> filtered_unfiltered_density_solution = nonlinear_solution;
         BlockVector<double> filter_adjoint_unfiltered_density_multiplier_solution = nonlinear_solution;
-        filtered_unfiltered_density_solution.block(2) = 0;
-        filter_adjoint_unfiltered_density_multiplier_solution.block(4) = 0;
+        filtered_unfiltered_density_solution.block(SolutionBlocks::unfiltered_density) = 0;
+        filter_adjoint_unfiltered_density_multiplier_solution.block(SolutionBlocks::unfiltered_density_multiplier) = 0;
 
-        filter_matrix.vmult(filtered_unfiltered_density_solution.block(2), nonlinear_solution.block(2));
-        filter_matrix.Tvmult(filter_adjoint_unfiltered_density_multiplier_solution.block(4),
-                             nonlinear_solution.block(4));
+        filter_matrix.vmult(filtered_unfiltered_density_solution.block(SolutionBlocks::unfiltered_density), nonlinear_solution.block(SolutionBlocks::unfiltered_density));
+        filter_matrix.Tvmult(filter_adjoint_unfiltered_density_multiplier_solution.block(SolutionBlocks::unfiltered_density_multiplier),
+                             nonlinear_solution.block(SolutionBlocks::unfiltered_density_multiplier));
 
 
         std::vector<double> old_density_values(n_q_points);
@@ -1111,8 +1173,8 @@ namespace SAND {
                 unsigned int j = iter->column();
                 double value = iter->value() * cell->measure();
 
-                system_matrix.block(4, 2).add(i, j, value);
-                system_matrix.block(2, 4).add(j, i, value);
+                system_matrix.block(SolutionBlocks::unfiltered_density_multiplier, SolutionBlocks::unfiltered_density).add(i, j, value);
+                system_matrix.block(SolutionBlocks::unfiltered_density, SolutionBlocks::unfiltered_density_multiplier).add(j, i, value);
             }
         }
     }
@@ -1174,10 +1236,10 @@ namespace SAND {
             const BlockVector<double> state_test_z =
                     (fraction_to_boundary * state) + (step_size_z * step);
 
-            const bool accept_s = (state_test_s.block(5).is_non_negative())
-                                  && (state_test_s.block(7).is_non_negative());
-            const bool accept_z = (state_test_z.block(6).is_non_negative())
-                                  && (state_test_z.block(8).is_non_negative());
+            const bool accept_s = (state_test_s.block(SolutionBlocks::density_lower_slack).is_non_negative())
+                                  && (state_test_s.block(SolutionBlocks::density_upper_slack).is_non_negative());
+            const bool accept_z = (state_test_z.block(SolutionBlocks::density_lower_slack_multiplier).is_non_negative())
+                                  && (state_test_z.block(SolutionBlocks::density_upper_slack_multiplier).is_non_negative());
 
             if (accept_s) {
                 step_size_s_low = step_size_s;
@@ -1199,17 +1261,15 @@ namespace SAND {
     template<int dim>
     BlockVector<double>
     SANDTopOpt<dim>::calculate_test_rhs(const BlockVector<double> &test_solution, const double barrier_size, const double /*penalty_parameter*/) const {
-        const FEValuesExtractors::Scalar densities(0);
-        const FEValuesExtractors::Vector displacements(1);
-        const FEValuesExtractors::Scalar unfiltered_densities(1 + dim);
-        const FEValuesExtractors::Vector displacement_multipliers(2 + dim);
-        const FEValuesExtractors::Scalar unfiltered_density_multipliers(2 + 2 * dim);
-        const FEValuesExtractors::Scalar density_lower_slacks(3 + 2 * dim);
-        const FEValuesExtractors::Scalar density_lower_slack_multipliers(
-                4 + 2 * dim);
-        const FEValuesExtractors::Scalar density_upper_slacks(5 + 2 * dim);
-        const FEValuesExtractors::Scalar density_upper_slack_multipliers(
-                6 + 2 * dim);
+        const FEValuesExtractors::Scalar densities(SolutionComponents<dim>::density);
+        const FEValuesExtractors::Vector displacements(SolutionComponents<dim>::displacement);
+        const FEValuesExtractors::Scalar unfiltered_densities(SolutionComponents<dim>::unfiltered_density);
+        const FEValuesExtractors::Vector displacement_multipliers(SolutionComponents<dim>::displacement_multiplier);
+        const FEValuesExtractors::Scalar unfiltered_density_multipliers(SolutionComponents<dim>::unfiltered_density_multiplier);
+        const FEValuesExtractors::Scalar density_lower_slacks(SolutionComponents<dim>::density_lower_slack);
+        const FEValuesExtractors::Scalar density_lower_slack_multipliers(SolutionComponents<dim>::density_lower_slack_multiplier);
+        const FEValuesExtractors::Scalar density_upper_slacks(SolutionComponents<dim>::density_upper_slack);
+        const FEValuesExtractors::Scalar density_upper_slack_multipliers(SolutionComponents<dim>::density_upper_slack_multiplier);
 
         /*Remove any values from old iterations*/
 
@@ -1243,12 +1303,12 @@ namespace SAND {
 
         BlockVector<double> filtered_unfiltered_density_solution = nonlinear_solution;
         BlockVector<double> filter_adjoint_unfiltered_density_multiplier_solution = nonlinear_solution;
-        filtered_unfiltered_density_solution.block(2) = 0;
-        filter_adjoint_unfiltered_density_multiplier_solution.block(4) = 0;
+        filtered_unfiltered_density_solution.block(SolutionBlocks::unfiltered_density) = 0;
+        filter_adjoint_unfiltered_density_multiplier_solution.block(SolutionBlocks::unfiltered_density_multiplier) = 0;
 
-        filter_matrix.vmult(filtered_unfiltered_density_solution.block(2), nonlinear_solution.block(2));
-        filter_matrix.Tvmult(filter_adjoint_unfiltered_density_multiplier_solution.block(4),
-                             nonlinear_solution.block(4));
+        filter_matrix.vmult(filtered_unfiltered_density_solution.block(SolutionBlocks::unfiltered_density), nonlinear_solution.block(SolutionBlocks::unfiltered_density));
+        filter_matrix.Tvmult(filter_adjoint_unfiltered_density_multiplier_solution.block(SolutionBlocks::unfiltered_density_multiplier),
+                             nonlinear_solution.block(SolutionBlocks::unfiltered_density_multiplier));
 
 
         std::vector<double> old_density_values(n_q_points);
@@ -1528,24 +1588,24 @@ namespace SAND {
         //calculate elasticity constraint merit
         {
 
-            elasticity_constraint_merit = penalty_multiplier * test_rhs.block(3).l1_norm();
+            elasticity_constraint_merit = penalty_multiplier * test_rhs.block(SolutionBlocks::displacement_multiplier).l1_norm();
         }
 
         //calculate filter constraint merit
         {
-            filter_constraint_merit = penalty_multiplier * test_rhs.block(4).l1_norm();
+            filter_constraint_merit = penalty_multiplier * test_rhs.block(SolutionBlocks::unfiltered_density_multiplier).l1_norm();
         }
 
         //calculate lower slack merit
         {
 
-            lower_slack_merit = penalty_multiplier * test_rhs.block(6).l1_norm();
+            lower_slack_merit = penalty_multiplier * test_rhs.block(SolutionBlocks::density_lower_slack_multiplier).l1_norm();
         }
 
         //calculate upper slack merit
         {
 
-            upper_slack_merit = penalty_multiplier * test_rhs.block(8).l1_norm();
+            upper_slack_merit = penalty_multiplier * test_rhs.block(SolutionBlocks::density_upper_slack_multiplier).l1_norm();
         }
 
 
@@ -1618,15 +1678,15 @@ namespace SAND {
         const double step_size_z = max_step_sizes.second;
         BlockVector<double> max_step(9);
 
-        max_step.block(0) = step_size_s * step.block(0);
-        max_step.block(1) = step_size_s * step.block(1);
-        max_step.block(2) = step_size_s * step.block(2);
-        max_step.block(3) = step_size_z * step.block(3);
-        max_step.block(4) = step_size_z * step.block(4);
-        max_step.block(5) = step_size_s * step.block(5);
-        max_step.block(6) = step_size_z * step.block(6);
-        max_step.block(7) = step_size_s * step.block(7);
-        max_step.block(8) = step_size_z * step.block(8);
+        max_step.block(SolutionBlocks::density) = step_size_s * step.block(SolutionBlocks::density);
+        max_step.block(SolutionBlocks::displacement) = step_size_s * step.block(SolutionBlocks::displacement);
+        max_step.block(SolutionBlocks::unfiltered_density) = step_size_s * step.block(SolutionBlocks::unfiltered_density);
+        max_step.block(SolutionBlocks::displacement_multiplier) = step_size_z * step.block(SolutionBlocks::displacement_multiplier);
+        max_step.block(SolutionBlocks::unfiltered_density_multiplier) = step_size_z * step.block(SolutionBlocks::unfiltered_density_multiplier);
+        max_step.block(SolutionBlocks::density_lower_slack) = step_size_s * step.block(SolutionBlocks::density_lower_slack);
+        max_step.block(SolutionBlocks::density_lower_slack_multiplier) = step_size_z * step.block(SolutionBlocks::density_lower_slack_multiplier);
+        max_step.block(SolutionBlocks::density_upper_slack) = step_size_s * step.block(SolutionBlocks::density_upper_slack);
+        max_step.block(SolutionBlocks::density_upper_slack_multiplier) = step_size_z * step.block(SolutionBlocks::density_upper_slack_multiplier);
 
         return max_step;
     }
@@ -1816,7 +1876,8 @@ namespace SAND {
 
 
 
-                 for (const unsigned int face_number : cell->face_indices())
+                 for (unsigned int face_number = 0;
+                      face_number < GeometryInfo<dim>::faces_per_cell; ++face_number)
                      {
                          if ((cell->face(face_number)->at_boundary())
                              ||
@@ -1871,11 +1932,6 @@ namespace SAND {
                                  stlfile << "   endfacet\n";
 
                              }
-
-
-
-
-
                      }
                  }
              }
