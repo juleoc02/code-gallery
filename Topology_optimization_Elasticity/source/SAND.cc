@@ -1133,7 +1133,7 @@ namespace SAND {
 
             }
             for (const auto &face : cell->face_iterators()) {
-                if (face->at_boundary() && face->boundary_id() == 1) {
+                if (face->at_boundary() && face->boundary_id() == BoundaryIds::down_force) {
                     fe_face_values.reinit(cell, face);
 
                     for (unsigned int face_q_point = 0;
@@ -1495,7 +1495,7 @@ namespace SAND {
             }
 
             for (const auto &face : cell->face_iterators()) {
-                if (face->at_boundary() && face->boundary_id() == 1) {
+                if (face->at_boundary() && face->boundary_id() == BoundaryIds::down_force) {
                     fe_face_values.reinit(cell, face);
 
                     for (unsigned int face_q_point = 0;
@@ -1566,7 +1566,7 @@ namespace SAND {
                 traction[1] = -1;
 
                 for (const auto &face : cell->face_iterators()) {
-                    if (face->at_boundary() && face->boundary_id()== 1)
+                    if (face->at_boundary() && face->boundary_id()== BoundaryIds::down_force)
                     {
                         fe_face_values.reinit(cell, face);
                         fe_face_values[displacements].get_function_values(test_solution,
