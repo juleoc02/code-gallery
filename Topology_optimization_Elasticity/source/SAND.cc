@@ -1256,7 +1256,8 @@ namespace SAND {
         return {step_size_s_low, step_size_z_low};
     }
 
-// Creates a rhs vector that we can use to look at the magnitude of the KKT conditions.  This is then used for testing the convergence before shrinking barrier size, as well as in the calculation of the l1 merit.
+// Creates a rhs vector that we can use to look at the magnitude of the KKT conditions.
+// This is then used for testing the convergence before shrinking barrier size, as well as in the calculation of the l1 merit.
 
     template<int dim>
     BlockVector<double>
@@ -1618,6 +1619,7 @@ namespace SAND {
     }
 
     // This updates the penalty multiplier in the merit function, and then returns the largest scaled feasible step
+    // Uses the "calculate_max_step_sizes" function to find the largest feasible step - s>0 and z>0
 
     template<int dim>
     BlockVector<double>
@@ -1783,7 +1785,8 @@ namespace SAND {
 
 
     // This outputs an .stl file for 3d printing the result! .stl files  made up of normal vectors and triangles.
-    // The triangle nodes must go counter-clockwise when looking from the outside, which requires a few checks.
+    // The triangle nodes must go counter-clockwise when looking from the outside, and the normal vectors must be unit vectors pointing outwards,
+    // which requires a few checks.
     template<int dim>
     void
     SANDTopOpt<dim>::write_as_stl()
