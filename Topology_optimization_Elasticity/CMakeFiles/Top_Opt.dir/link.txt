@@ -1,1 +1,0 @@
-/usr/bin/c++    -rdynamic  -rdynamic -fuse-ld=gold -pthread -ggdb CMakeFiles/Top_Opt.dir/source/SAND.cc.o  -o Top_Opt  -Wl,-rpath,/usr/local/lib /usr/local/lib/libdeal_II.g.so.9.2.0 -ldl -lrt 
