@@ -167,10 +167,10 @@ namespace SAND {
         calculate_max_step_size(const BlockVector<double> &state, const BlockVector<double> &step, const double barrier_size) const;
 
         BlockVector<double>
-        calculate_test_rhs(const BlockVector<double> &test_solution, const double barrier_size, const double penalty_parameter) const;
+        calculate_test_rhs(const BlockVector<double> &test_solution, const double barrier_size) const;
 
         double
-        calculate_exact_merit(const BlockVector<double> &test_solution, const double barrier_size, const double penalty_parameter);
+        calculate_exact_merit(const BlockVector<double> &test_solution, const double barrier_size);
 
         BlockVector<double>
         find_max_step(const BlockVector<double> &state, const double barrier_size);
@@ -1321,9 +1321,18 @@ namespace SAND {
     }
 
 
-  // @sect3{Implementing the optimization algorithm}
+  // @sect3{Details of the optimization algorithm}
 
-    // A binary search figures out the maximum step that meets the dual feasibility - that s>0 and z>0. The fraction to boundary increases as the barrier size decreases.
+  // The next several functions deal with specific parts of the
+  // optimization algorithm, most notably with deciding whether the
+  // direction computed by solving the linearized (Newton) system is
+  // viable and, if so, how far we want to go in this direction.
+  
+    // We start with a function that does a binary search to figure
+    // out the maximum step that meets the dual feasibility -- that
+    // is, how far can we go so that $s>0$ and $z>0$. The function
+    // returns a pair of values, one each for the $s$ and $z$ slack
+    // variables.
     template<int dim>
     std::pair<double,double>
     SANDTopOpt<dim>::calculate_max_step_size(const BlockVector<double> &state, const BlockVector<double> &step, const double barrier_size) const {
@@ -1335,19 +1344,12 @@ namespace SAND {
         if (min_fraction_to_boundary < 1 - barrier_size)
         {
             if (1 - barrier_size < max_fraction_to_boundary)
-            {
                 fraction_to_boundary = 1-barrier_size;
-            }
             else
-            {
                 fraction_to_boundary = max_fraction_to_boundary;
-            }
-
         }
         else
-        {
             fraction_to_boundary = min_fraction_to_boundary;
-        }
 
         double step_size_s_low = 0;
         double step_size_z_low = 0;
@@ -1370,27 +1372,35 @@ namespace SAND {
             const bool accept_z = (state_test_z.block(SolutionBlocks::density_lower_slack_multiplier).is_non_negative())
                                   && (state_test_z.block(SolutionBlocks::density_upper_slack_multiplier).is_non_negative());
 
-            if (accept_s) {
+            if (accept_s)
                 step_size_s_low = step_size_s;
-            } else {
+            else
                 step_size_s_high = step_size_s;
-            }
-            if (accept_z) {
+            
+            if (accept_z)
                 step_size_z_low = step_size_z;
-            } else {
+            else
                 step_size_z_high = step_size_z;
-            }
         }
-//        std::cout << step_size_s_low << "    " << step_size_z_low << std::endl;
+
         return {step_size_s_low, step_size_z_low};
     }
 
-// Creates a rhs vector that we can use to look at the magnitude of the KKT conditions.
-// This is then used for testing the convergence before shrinking barrier size, as well as in the calculation of the l1 merit.
-
+  // The next function computes a right hand side vector linearized
+  // around a "test solution vector" that we can use to look at the
+  // magnitude of the KKT conditions.  This is then used for testing
+  // the convergence before shrinking barrier size, as well as in the
+  // calculation of the $l_1$ merit.
+  //
+  // The function is lengthy and complicated, but it is really just a
+  // copy of the right hand side part of what the `assemble_system()`
+  // function above did.
     template<int dim>
     BlockVector<double>
-    SANDTopOpt<dim>::calculate_test_rhs(const BlockVector<double> &test_solution, const double barrier_size, const double /*penalty_parameter*/) const {
+    SANDTopOpt<dim>::calculate_test_rhs(const BlockVector<double> &test_solution, const double barrier_size) const {
+        BlockVector<double> test_rhs;
+        test_rhs.reinit (system_rhs); /* a zero vector with size and blocking of system_rhs */
+
         const FEValuesExtractors::Scalar densities(SolutionComponents::density<dim>);
         const FEValuesExtractors::Vector displacements(SolutionComponents::displacement<dim>);
         const FEValuesExtractors::Scalar unfiltered_densities(SolutionComponents::unfiltered_density<dim>);
@@ -1400,12 +1410,6 @@ namespace SAND {
         const FEValuesExtractors::Scalar density_lower_slack_multipliers(SolutionComponents::density_lower_slack_multiplier<dim>);
         const FEValuesExtractors::Scalar density_upper_slacks(SolutionComponents::density_upper_slack<dim>);
         const FEValuesExtractors::Scalar density_upper_slack_multipliers(SolutionComponents::density_upper_slack_multiplier<dim>);
-
-        /*Remove any values from old iterations*/
-
-        BlockVector<double> test_rhs;
-        test_rhs = system_rhs;
-        test_rhs = 0;
 
         const QGauss<dim> quadrature_formula(fe.degree + 1);
         const QGauss<dim - 1> face_quadrature_formula(fe.degree + 1);
@@ -1431,6 +1435,7 @@ namespace SAND {
         const Functions::ConstantFunction<dim> lambda(1.), mu(1.);
         std::vector<Tensor<1, dim>> rhs_values(n_q_points);
 
+//TODO: Same question as above in assemble_system()
         BlockVector<double> filtered_unfiltered_density_solution = nonlinear_solution;
         BlockVector<double> filter_adjoint_unfiltered_density_multiplier_solution = nonlinear_solution;
         filtered_unfiltered_density_solution.block(SolutionBlocks::unfiltered_density) = 0;
@@ -1539,7 +1544,7 @@ namespace SAND {
                             fe_values[density_upper_slack_multipliers].value(i,
                                                                              q_point);
 
-                    //rhs eqn 0
+                    /* Equation 0 */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (
                                     density_penalty_exponent *
@@ -1550,7 +1555,7 @@ namespace SAND {
                                                                    * old_displacement_multiplier_symmgrads[q_point]))
                                     - density_phi_i * old_unfiltered_density_multiplier_values[q_point]);
 
-                    //rhs eqn 1 - boundary terms counted later
+                    /* Equation 1; boundary terms will be added further down below. */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (
                                     std::pow(old_density_values[q_point], density_penalty_exponent)
@@ -1560,7 +1565,7 @@ namespace SAND {
                                                                    * displacement_phi_i_symmgrad))
                             );
 
-                    //rhs eqn 2
+                    /* Equation 2 */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (
                                     unfiltered_density_phi_i *
@@ -1572,7 +1577,7 @@ namespace SAND {
 
 
 
-                    //rhs eqn 3 - boundary terms counted later
+                    /* Equation 3; boundary term will again be dealt with below. */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (
                                     std::pow(old_density_values[q_point], density_penalty_exponent)
@@ -1582,39 +1587,38 @@ namespace SAND {
                                                                    * old_displacement_symmgrads[q_point]))
                             );
 
-                    //rhs eqn 4
+                    /* Equation 4 */
                     cell_rhs(i) +=
                             fe_values.JxW(q_point) *
                             (lower_slack_multiplier_phi_i
                              * (old_unfiltered_density_values[q_point] - old_lower_slack_values[q_point])
                             );
 
-                    //rhs eqn 5
+                    /* Equation 5 */
                     cell_rhs(i) +=
                             fe_values.JxW(q_point) * (
                                     upper_slack_multiplier_phi_i * (1 - old_unfiltered_density_values[q_point]
                                        - old_upper_slack_values[q_point]));
 
-                    //rhs eqn 6
+                    /* Equation 6 */
                     cell_rhs(i) +=
                             fe_values.JxW(q_point) * (
                                     unfiltered_density_multiplier_phi_i
                                     * (old_density_values[q_point] - filtered_unfiltered_density_values[q_point])
                             );
 
-                    //rhs eqn 7
+                    /* Equation 7 */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (lower_slack_phi_i
                                                            * (old_lower_slack_multiplier_values[q_point] -
                                                               barrier_size / old_lower_slack_values[q_point])
                             );
 
-                    //rhs eqn 8
+                    /* Equation 8 */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (upper_slack_phi_i
                                                            * (old_upper_slack_multiplier_values[q_point] -
                                                               barrier_size / old_upper_slack_values[q_point]));
-
                 }
 
 
@@ -1650,29 +1654,33 @@ namespace SAND {
 
             constraints.distribute_local_to_global(
                     cell_rhs, local_dof_indices, test_rhs);
-
-
         }
+        
         return test_rhs;
-
     }
 
 
-// I use an exact l1 merit function in my watchdog algorithm to determine steps. This calculates the exact l1 merit
+  // The algorithm we use herein uses a "watchdog" strategy to
+  // determine where and how far to go from the current iterate.  We
+  // base the watchdog strategy on an exact $l_1$ merit function. This
+  // function calculates the exact $l_1$ merit of a given, putative,
+  // next iterate.
+  //
+  // The merit function consists of the sum of the objective function
+  // (which is simply an integral of external forces (on the boundary
+  // of the domain) times the displacement values of a test solution
+  // (typically, the current solution plus some multiple of the Newton
+  // update), and the $l_1$ norms of the Lagrange multiplier
+  // components of residual vectors. The following code computes these
+  // parts in turn:
     template<int dim>
     double
-    SANDTopOpt<dim>::calculate_exact_merit(const BlockVector<double> &test_solution, const double barrier_size, const double /*penalty_parameter*/)
+    SANDTopOpt<dim>::calculate_exact_merit(const BlockVector<double> &test_solution, const double barrier_size)
     {
        TimerOutput::Scope t(timer, "merit function");
 
+       // Start with computing the objective function:
        double objective_function_merit = 0;
-       double elasticity_constraint_merit = 0;
-       double filter_constraint_merit = 0;
-       double lower_slack_merit = 0;
-       double upper_slack_merit = 0;
-
-       //Calculate objective function
-       //Loop over cells, integrate along boundary because I only have external force
        {
             const FEValuesExtractors::Vector displacements(SolutionComponents::displacement<dim>);
             const QGauss<dim> quadrature_formula(fe.degree + 1);
@@ -1686,17 +1694,16 @@ namespace SAND {
 
             const unsigned int n_face_q_points = face_quadrature_formula.size();
 
+            std::vector<Tensor<1, dim>> displacement_face_values(n_face_q_points);
 
-            std::vector<Tensor<1, dim>> old_displacement_face_values(n_face_q_points);
-
-            for (const auto &cell : dof_handler.active_cell_iterators()) {
-
+            for (const auto &cell : dof_handler.active_cell_iterators())
+              {
                 for (const auto &face : cell->face_iterators()) {
                     if (face->at_boundary() && face->boundary_id()== BoundaryIds::down_force)
                     {
                         fe_face_values.reinit(cell, face);
                         fe_face_values[displacements].get_function_values(test_solution,
-                                                                          old_displacement_face_values);
+                                                                          displacement_face_values);
                         for (unsigned int face_q_point = 0;
                              face_q_point < n_face_q_points; ++face_q_point) {
                           Tensor<1, dim> traction;
@@ -1704,49 +1711,34 @@ namespace SAND {
 
                             objective_function_merit +=
                                     traction
-                                    * old_displacement_face_values[face_q_point]
+                                    * displacement_face_values[face_q_point]
                                     * fe_face_values.JxW(face_q_point);
                         }
                     }
                 }
             }
         }
-        //
-        const BlockVector<double> test_rhs = calculate_test_rhs(test_solution, barrier_size, 1);
 
+       // Then compute the residual and take the $l_1$ norms of the
+       // components that correspond to Lagrange mulipliers. We add
+       // those to the objective function computed above, and return
+       // the sum at the bottom:
+        const BlockVector<double> test_rhs = calculate_test_rhs(test_solution, barrier_size);
 
-        //calculate elasticity constraint merit
-        {
+        const double elasticity_constraint_merit = penalty_multiplier * test_rhs.block(SolutionBlocks::displacement_multiplier).l1_norm();
+        const double filter_constraint_merit = penalty_multiplier * test_rhs.block(SolutionBlocks::unfiltered_density_multiplier).l1_norm();
+        const double lower_slack_merit = penalty_multiplier * test_rhs.block(SolutionBlocks::density_lower_slack_multiplier).l1_norm();
+        const double upper_slack_merit = penalty_multiplier * test_rhs.block(SolutionBlocks::density_upper_slack_multiplier).l1_norm();
 
-            elasticity_constraint_merit = penalty_multiplier * test_rhs.block(SolutionBlocks::displacement_multiplier).l1_norm();
-        }
-
-        //calculate filter constraint merit
-        {
-            filter_constraint_merit = penalty_multiplier * test_rhs.block(SolutionBlocks::unfiltered_density_multiplier).l1_norm();
-        }
-
-        //calculate lower slack merit
-        {
-
-            lower_slack_merit = penalty_multiplier * test_rhs.block(SolutionBlocks::density_lower_slack_multiplier).l1_norm();
-        }
-
-        //calculate upper slack merit
-        {
-
-            upper_slack_merit = penalty_multiplier * test_rhs.block(SolutionBlocks::density_upper_slack_multiplier).l1_norm();
-        }
-
-
-
-        double total_merit;
-
-        total_merit = objective_function_merit + elasticity_constraint_merit + filter_constraint_merit + lower_slack_merit + upper_slack_merit;
-
+        const double total_merit = objective_function_merit
+                                   + elasticity_constraint_merit
+                                   + filter_constraint_merit
+                                   + lower_slack_merit + upper_slack_merit;
         return total_merit;
     }
 
+
+  
     // This updates the penalty multiplier in the merit function, and then returns the largest scaled feasible step
     // Uses the "calculate_max_step_sizes" function to find the largest feasible step - s>0 and z>0
 
@@ -1765,35 +1757,34 @@ namespace SAND {
         double hess_part = 0;
         double grad_part = 0;
         double constraint_norm = 0;
-        const std::vector<unsigned int> decision_variable_locations = {0, 1, 2};
 
-        const std::vector<unsigned int> equality_constraint_locations = {3, 4, 6, 8};
-
-        for(unsigned int i = 0; i<3; ++i)
+//TODO: could this be expressed in terms of the symbolic component names?
+        const std::vector<unsigned int> decision_variables = {0, 1, 2};
+        for(const unsigned int decision_variable_i : decision_variables)
         {
-            for(unsigned int j = 0; j<3; ++j)
+            for(const unsigned int decision_variable_j : decision_variables)
             {
-                Vector<double> temp_vector;
-                temp_vector.reinit(step.block(decision_variable_locations[i]).size());
-                system_matrix.block(decision_variable_locations[i],decision_variable_locations[j]).vmult(temp_vector, step.block(decision_variable_locations[j]));
-                hess_part = hess_part + step.block(decision_variable_locations[i]) * temp_vector;
+                Vector<double> temp_vector(step.block(decision_variable_i).size());
+                system_matrix.block(decision_variable_i,
+                                    decision_variable_j).vmult(temp_vector,
+                                                               step.block(decision_variable_j));
+                hess_part += step.block(decision_variable_i) * temp_vector;
             }
-            grad_part = grad_part - system_rhs.block(decision_variable_locations[i])*step.block(decision_variable_locations[i]);
+            grad_part -= system_rhs.block(decision_variable_i)*step.block(decision_variable_i);
         }
 
-        for(unsigned int i = 0; i<4; ++i)
+//TODO: Same here        
+        const std::vector<unsigned int> equality_constraints = {3, 4, 6, 8};
+        for(unsigned int i : equality_constraints)
         {
-            constraint_norm =   constraint_norm + system_rhs.block(equality_constraint_locations[i]).linfty_norm();
+            constraint_norm =   constraint_norm + system_rhs.block(i).linfty_norm();
         }
 
         if (hess_part > 0)
-        {
             test_penalty_multiplier = (grad_part + .5 * hess_part)/(.05 * constraint_norm);
-        }
         else
-        {
             test_penalty_multiplier = (grad_part)/(.05 * constraint_norm);
-        }
+        
         if (test_penalty_multiplier > penalty_multiplier)
         {
             penalty_multiplier = test_penalty_multiplier;
@@ -1831,8 +1822,8 @@ namespace SAND {
         double step_size = 1;
             for(unsigned int k = 0; k<10; ++k)
             {
-                const double merit_derivative = (calculate_exact_merit(state + .0001 * max_step,barrier_size, 1) - calculate_exact_merit(state,barrier_size, 1))/.0001;
-                if(calculate_exact_merit(state + step_size * max_step,barrier_size, 1) <calculate_exact_merit(state,barrier_size, 1) + step_size * descent_requirement * merit_derivative )
+                const double merit_derivative = (calculate_exact_merit(state + .0001 * max_step,barrier_size) - calculate_exact_merit(state,barrier_size))/.0001;
+                if(calculate_exact_merit(state + step_size * max_step,barrier_size) <calculate_exact_merit(state,barrier_size) + step_size * descent_requirement * merit_derivative )
                 {
                     break;
                 }
@@ -1853,7 +1844,7 @@ namespace SAND {
     SANDTopOpt<dim>::check_convergence(const BlockVector<double> &state,  const double barrier_size)
     {
                const double convergence_condition = 1e-2;
-               const BlockVector<double> test_rhs = calculate_test_rhs(state,barrier_size,1);
+               const BlockVector<double> test_rhs = calculate_test_rhs(state,barrier_size);
                std::cout << "current rhs norm is " << test_rhs.linfty_norm() << std::endl;
                if (test_rhs.l1_norm()<convergence_condition * barrier_size)
                {
@@ -2154,10 +2145,10 @@ namespace SAND {
                     //apply full step to current state
                     current_state=current_state+current_step;
                     //if merit of current state is less than goal
-                    double current_merit = calculate_exact_merit(current_state, barrier_size, 1);
+                    double current_merit = calculate_exact_merit(current_state, barrier_size);
                     std::cout << "current merit is: " <<current_merit << "  and  ";
-                    double merit_derivative = ((calculate_exact_merit(watchdog_state+.0001*watchdog_step,barrier_size,1) - calculate_exact_merit(watchdog_state,barrier_size,1 ))/.0001);
-                    goal_merit = calculate_exact_merit(watchdog_state,barrier_size,1) + descent_requirement * merit_derivative;
+                    double merit_derivative = ((calculate_exact_merit(watchdog_state+.0001*watchdog_step,barrier_size) - calculate_exact_merit(watchdog_state,barrier_size ))/.0001);
+                    goal_merit = calculate_exact_merit(watchdog_state,barrier_size) + descent_requirement * merit_derivative;
                     std::cout << "goal merit is "<<goal_merit <<std::endl;
                     if(current_merit < goal_merit)
                     {
@@ -2182,7 +2173,7 @@ namespace SAND {
                     //update stretch state with found step length
                     const BlockVector<double> stretch_state = take_scaled_step(current_state, current_step, descent_requirement, barrier_size);
                     //if current merit is less than watchdog merit, or if stretch merit is less than earlier goal merit
-                    if(calculate_exact_merit(current_state,barrier_size,1) < calculate_exact_merit(watchdog_state,barrier_size,1) || calculate_exact_merit(stretch_state,barrier_size,1) < goal_merit)
+                    if(calculate_exact_merit(current_state,barrier_size) < calculate_exact_merit(watchdog_state,barrier_size) || calculate_exact_merit(stretch_state,barrier_size) < goal_merit)
                     {
                         std::cout << "in then" << std::endl;
                         current_state = stretch_state;
@@ -2192,7 +2183,7 @@ namespace SAND {
                     {
                         std::cout << "in else" << std::endl;
                         //if merit of stretch state is bigger than watchdog merit
-                        if (calculate_exact_merit(stretch_state,barrier_size,1) > calculate_exact_merit(watchdog_state,barrier_size,1))
+                        if (calculate_exact_merit(stretch_state,barrier_size) > calculate_exact_merit(watchdog_state,barrier_size))
                         {
                             //find step length from watchdog state that meets descent requirement
                             current_state = take_scaled_step(watchdog_state, watchdog_step, descent_requirement, barrier_size);
