@@ -2031,38 +2031,44 @@ namespace SAND {
                  }
 
                  // Next we need to deal with the four faces of the
-                 // cell, extruded into the $z$ direction:
+                 // cell, extruded into the $z$ direction. However, we
+                 // only need to writ these faces if either the face
+                 // abuts the domain boundary, or if it is the
+                 // interface between a cell with density greater than
+                 // 0.5, and a cell with a density less than 0.5.
                  for (unsigned int face_number = 0;
                       face_number < GeometryInfo<dim>::faces_per_cell; ++face_number)
                      {
-                         if ((cell->face(face_number)->at_boundary())
+                       const typename DoFHandler<dim>::face_iterator face = cell->face(face_number);
+                       
+                         if ((face->at_boundary())
                              ||
-                             (!cell->face(face_number)->at_boundary()
+                             (!face->at_boundary()
                               &&
                               (nonlinear_solution.block(0)[cell->neighbor(face_number)->active_cell_index()]<0.5)))
                          {
                              const Tensor<1,dim> normal_vector
-                                     = (cell->face(face_number)->center() - cell->center());
+                                     = (face->center() - cell->center());
                              const double normal_norm = normal_vector.norm();
-                             if ((cell->face(face_number)->vertex(0)[0] - cell->face(face_number)->vertex(0)[0])  *  (cell->face(face_number)->vertex(1)[1] - cell->face(face_number)->vertex(0)[1])  *  0.000000e+00
-                                +(cell->face(face_number)->vertex(0)[1] - cell->face(face_number)->vertex(0)[1])  *  (0 - 0)                                                                                *  normal_vector[0]
-                                +(height - 0)                                                                          *  (cell->face(face_number)->vertex(1)[0] - cell->face(face_number)->vertex(0)[0])        *  normal_vector[1]
-                                -(cell->face(face_number)->vertex(0)[0] - cell->face(face_number)->vertex(0)[0])  *  (0 - 0)                                                                                *  normal_vector[1]
-                                -(cell->face(face_number)->vertex(0)[1] - cell->face(face_number)->vertex(0)[1])  *  (cell->face(face_number)->vertex(1)[0] - cell->face(face_number)->vertex(0)[0]) *  normal_vector[0]
-                                -(height - 0)                                                                     *  (cell->face(face_number)->vertex(1)[1] - cell->face(face_number)->vertex(0)[1])        *  0 >0)
+                             if ((face->vertex(0)[0] - face->vertex(0)[0])  *  (face->vertex(1)[1] - face->vertex(0)[1])  *  0.000000e+00
+                                +(face->vertex(0)[1] - face->vertex(0)[1])  *  (0 - 0)                                                                                *  normal_vector[0]
+                                +(height - 0)                                                                          *  (face->vertex(1)[0] - face->vertex(0)[0])        *  normal_vector[1]
+                                -(face->vertex(0)[0] - face->vertex(0)[0])  *  (0 - 0)                                                                                *  normal_vector[1]
+                                -(face->vertex(0)[1] - face->vertex(0)[1])  *  (face->vertex(1)[0] - face->vertex(0)[0]) *  normal_vector[0]
+                                -(height - 0)                                                                     *  (face->vertex(1)[1] - face->vertex(0)[1])        *  0 >0)
                              {
                                  stlfile << "   facet normal " <<normal_vector[0]/normal_norm <<" " << normal_vector[1]/normal_norm << " " << 0.000000e+00 << "\n";
                                  stlfile << "      outer loop\n";
-                                 stlfile << "         vertex " << cell->face(face_number)->vertex(0)[0] << " " << cell->face(face_number)->vertex(0)[1] << " " << 0.000000e+00 << "\n";
-                                 stlfile << "         vertex " << cell->face(face_number)->vertex(0)[0] << " " << cell->face(face_number)->vertex(0)[1] << " " << height << "\n";
-                                 stlfile << "         vertex " << cell->face(face_number)->vertex(1)[0] << " " << cell->face(face_number)->vertex(1)[1] << " " << 0.000000e+00 << "\n";
+                                 stlfile << "         vertex " << face->vertex(0)[0] << " " << face->vertex(0)[1] << " " << 0.000000e+00 << "\n";
+                                 stlfile << "         vertex " << face->vertex(0)[0] << " " << face->vertex(0)[1] << " " << height << "\n";
+                                 stlfile << "         vertex " << face->vertex(1)[0] << " " << face->vertex(1)[1] << " " << 0.000000e+00 << "\n";
                                  stlfile << "      endloop\n";
                                  stlfile << "   endfacet\n";
                                  stlfile << "   facet normal " <<normal_vector[0]/normal_norm <<" " << normal_vector[1]/normal_norm << " " << 0.000000e+00 << "\n";
                                  stlfile << "      outer loop\n";
-                                 stlfile << "         vertex " << cell->face(face_number)->vertex(0)[0] << " " << cell->face(face_number)->vertex(0)[1] << " " << height << "\n";
-                                 stlfile << "         vertex " << cell->face(face_number)->vertex(1)[0] << " " << cell->face(face_number)->vertex(1)[1] << " " << height << "\n";
-                                 stlfile << "         vertex " << cell->face(face_number)->vertex(1)[0] << " " << cell->face(face_number)->vertex(1)[1] << " " << 0.000000e+00 << "\n";
+                                 stlfile << "         vertex " << face->vertex(0)[0] << " " << face->vertex(0)[1] << " " << height << "\n";
+                                 stlfile << "         vertex " << face->vertex(1)[0] << " " << face->vertex(1)[1] << " " << height << "\n";
+                                 stlfile << "         vertex " << face->vertex(1)[0] << " " << face->vertex(1)[1] << " " << 0.000000e+00 << "\n";
                                  stlfile << "      endloop\n";
                                  stlfile << "   endfacet\n";
                              }
@@ -2070,16 +2076,16 @@ namespace SAND {
                              {
                                  stlfile << "   facet normal " <<normal_vector[0]/normal_norm <<" " << normal_vector[1]/normal_norm << " " << 0.000000e+00 << "\n";
                                  stlfile << "      outer loop\n";
-                                 stlfile << "         vertex " << cell->face(face_number)->vertex(0)[0] << " " << cell->face(face_number)->vertex(0)[1] << " " << 0.000000e+00 << "\n";
-                                 stlfile << "         vertex " << cell->face(face_number)->vertex(1)[0] << " " << cell->face(face_number)->vertex(1)[1] << " " << 0.000000e+00 << "\n";
-                                 stlfile << "         vertex " << cell->face(face_number)->vertex(0)[0] << " " << cell->face(face_number)->vertex(0)[1] << " " << height << "\n";
+                                 stlfile << "         vertex " << face->vertex(0)[0] << " " << face->vertex(0)[1] << " " << 0.000000e+00 << "\n";
+                                 stlfile << "         vertex " << face->vertex(1)[0] << " " << face->vertex(1)[1] << " " << 0.000000e+00 << "\n";
+                                 stlfile << "         vertex " << face->vertex(0)[0] << " " << face->vertex(0)[1] << " " << height << "\n";
                                  stlfile << "      endloop\n";
                                  stlfile << "   endfacet\n";
                                  stlfile << "   facet normal " <<normal_vector[0]/normal_norm <<" " << normal_vector[1]/normal_norm << " " << 0.000000e+00 << "\n";
                                  stlfile << "      outer loop\n";
-                                 stlfile << "         vertex " << cell->face(face_number)->vertex(0)[0] << " " << cell->face(face_number)->vertex(0)[1] << " " << height << "\n";
-                                 stlfile << "         vertex " << cell->face(face_number)->vertex(1)[0] << " " << cell->face(face_number)->vertex(1)[1] << " " << 0.000000e+00 << "\n";
-                                 stlfile << "         vertex " << cell->face(face_number)->vertex(1)[0] << " " << cell->face(face_number)->vertex(1)[1] << " " << height << "\n";
+                                 stlfile << "         vertex " << face->vertex(0)[0] << " " << face->vertex(0)[1] << " " << height << "\n";
+                                 stlfile << "         vertex " << face->vertex(1)[0] << " " << face->vertex(1)[1] << " " << 0.000000e+00 << "\n";
+                                 stlfile << "         vertex " << face->vertex(1)[0] << " " << face->vertex(1)[1] << " " << height << "\n";
                                  stlfile << "      endloop\n";
                                  stlfile << "   endfacet\n";
 
