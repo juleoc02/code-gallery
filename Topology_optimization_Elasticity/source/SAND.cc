@@ -690,51 +690,11 @@ namespace SAND {
     void
     SANDTopOpt<dim>::setup_filter_matrix() {
 
-//TODO: I think we could just copy the sparsity pattern from above instead of re-doing all of the computations      
-        DynamicSparsityPattern filter_dsp(dof_handler.get_triangulation().n_active_cells(),
-                                          dof_handler.get_triangulation().n_active_cells());
+        //The sparsity pattern of the filter has already been determined
+        // and implemented in the setup_system() function. We copy the
+        // structure from the appropriate block and use it again here.
 
-        for (const auto &cell : dof_handler.active_cell_iterators()) {
-            const unsigned int i = cell->active_cell_index();
-
-            std::set<unsigned int> neighbor_ids;
-            std::set<typename Triangulation<dim>::cell_iterator> cells_to_check;
-
-            neighbor_ids.insert(i);
-            cells_to_check.insert(cell);
-            
-            unsigned int n_neighbors = 1;
-            while (true) {
-                std::set<typename Triangulation<dim>::cell_iterator> cells_to_check_temp;
-                for (auto check_cell : cells_to_check) {
-                    for (unsigned int n = 0;
-                         n < GeometryInfo<dim>::faces_per_cell; ++n) {
-                        if (!(check_cell->face(n)->at_boundary())) {
-                            const double distance = cell->center().distance(
-                                    check_cell->neighbor(n)->center());
-                            if ((distance < filter_r) &&
-                                !(neighbor_ids.count(check_cell->neighbor(n)->active_cell_index()))) {
-                                cells_to_check_temp.insert(check_cell->neighbor(n));
-                                neighbor_ids.insert(check_cell->neighbor(n)->active_cell_index());
-                            }
-                        }
-                    }
-                }
-
-                if (neighbor_ids.size() == n_neighbors)
-                    break;
-                else {
-                    cells_to_check = cells_to_check_temp;
-                    n_neighbors = neighbor_ids.size();
-                }
-            }
-
-            for (auto j : neighbor_ids) {
-                filter_dsp.add(i, j);
-            }
-        }
-
-        filter_sparsity_pattern.copy_from(filter_dsp);
+        filter_sparsity_pattern.copy_from(sparsity_pattern.block(SolutionBlocks::unfiltered_density,SolutionBlocks::unfiltered_density_multiplier));
         filter_matrix.reinit(filter_sparsity_pattern);
 
         // Having so built the sparsity pattern, now we re-do all of
