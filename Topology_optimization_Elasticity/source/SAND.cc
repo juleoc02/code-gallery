@@ -1760,10 +1760,6 @@ namespace SAND {
             penalty_multiplier = test_penalty_multiplier;
             std::cout << "penalty multiplier updated to " << penalty_multiplier << std::endl;
         }
-        else
-        {
-            std::cout << "penalty multiplier kept at " << penalty_multiplier << std::endl;
-        }
 
         const auto max_step_sizes= calculate_max_step_size(state,step,barrier_size);
         const double step_size_s = max_step_sizes.first;
