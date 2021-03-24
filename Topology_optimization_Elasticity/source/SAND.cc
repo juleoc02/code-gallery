@@ -245,7 +245,7 @@ namespace SAND {
             dof_handler(triangulation),
             density_ratio (.5),
             density_penalty_exponent (3),
-            filter_r (.25),
+            filter_r (.251),
             penalty_multiplier (1),
             timer(std::cout,
                   TimerOutput::summary,
@@ -290,7 +290,7 @@ namespace SAND {
                         face->set_boundary_id(BoundaryIds::no_force);
                     }
                     else if (std::fabs(center(1) - 1) < 1e-12) {
-                        if ((std::fabs(center(0) - 3) < .1)) {
+                        if ((std::fabs(center(0) - 3) < .3)) {
                             face->set_boundary_id(BoundaryIds::down_force);
                         } else {
                             face->set_boundary_id(BoundaryIds::no_force);
@@ -1400,14 +1400,14 @@ namespace SAND {
         std::vector<Tensor<1, dim>> rhs_values(n_q_points);
 
 
-        BlockVector<double> filtered_unfiltered_density_solution = nonlinear_solution;
-        BlockVector<double> filter_adjoint_unfiltered_density_multiplier_solution = nonlinear_solution;
+        BlockVector<double> filtered_unfiltered_density_solution = test_solution;
+        BlockVector<double> filter_adjoint_unfiltered_density_multiplier_solution = test_solution;
         filtered_unfiltered_density_solution.block(SolutionBlocks::unfiltered_density) = 0;
         filter_adjoint_unfiltered_density_multiplier_solution.block(SolutionBlocks::unfiltered_density_multiplier) = 0;
 
-        filter_matrix.vmult(filtered_unfiltered_density_solution.block(SolutionBlocks::unfiltered_density), nonlinear_solution.block(SolutionBlocks::unfiltered_density));
+        filter_matrix.vmult(filtered_unfiltered_density_solution.block(SolutionBlocks::unfiltered_density), test_solution.block(SolutionBlocks::unfiltered_density));
         filter_matrix.Tvmult(filter_adjoint_unfiltered_density_multiplier_solution.block(SolutionBlocks::unfiltered_density_multiplier),
-                             nonlinear_solution.block(SolutionBlocks::unfiltered_density_multiplier));
+                             test_solution.block(SolutionBlocks::unfiltered_density_multiplier));
 
 
         std::vector<double> old_density_values(n_q_points);
@@ -2177,7 +2177,7 @@ namespace SAND {
                 converged = check_convergence(current_state, barrier_size);
                 //end while
             }
-            const double barrier_size_multiplier = .5;
+            const double barrier_size_multiplier = .6;
             const double barrier_size_exponent = 1.2;
 
             if (barrier_size * barrier_size_multiplier < std::pow(barrier_size, barrier_size_exponent))
