@@ -2141,13 +2141,13 @@ namespace SAND {
                     //if current merit is less than watchdog merit, or if stretch merit is less than earlier goal merit
                     if(calculate_exact_merit(current_state,barrier_size) < calculate_exact_merit(watchdog_state,barrier_size) || calculate_exact_merit(stretch_state,barrier_size) < goal_merit)
                     {
-                        std::cout << "in then" << std::endl;
+                        std::cout << "Taking scaled step from end of Watchdog" << std::endl;
                         current_state = stretch_state;
                         iteration_number = iteration_number + max_uphill_steps + 1;
                     }
                     else
                     {
-                        std::cout << "in else" << std::endl;
+                        std::cout << "Taking scaled step from beginning of watchdog" << std::endl;
                         //if merit of stretch state is bigger than watchdog merit
                         if (calculate_exact_merit(stretch_state,barrier_size) > calculate_exact_merit(watchdog_state,barrier_size))
                         {
@@ -2173,7 +2173,7 @@ namespace SAND {
                 converged = check_convergence(current_state, barrier_size);
                 //end while
             }
-            const double barrier_size_multiplier = .6;
+            const double barrier_size_multiplier = .8;
             const double barrier_size_exponent = 1.2;
 
             if (barrier_size * barrier_size_multiplier < std::pow(barrier_size, barrier_size_exponent))
