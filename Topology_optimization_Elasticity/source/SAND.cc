@@ -2173,7 +2173,7 @@ namespace SAND {
                 converged = check_convergence(current_state, barrier_size);
                 //end while
             }
-            const double barrier_size_multiplier = .8;
+            const double barrier_size_multiplier = .7;
             const double barrier_size_exponent = 1.2;
 
             if (barrier_size * barrier_size_multiplier < std::pow(barrier_size, barrier_size_exponent))
