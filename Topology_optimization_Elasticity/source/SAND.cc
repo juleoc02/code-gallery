@@ -811,8 +811,18 @@ namespace SAND {
         const Functions::ConstantFunction<dim> mu(1.);
         std::vector<Tensor<1, dim>> rhs_values(n_q_points);
 
-// At this point, we apply the filter to the unfiltered density, and apply the adjoint operation to the unfiltered density multiplier.
-// We use this later to tell us how far off our filtered density is from the filter applied to the unfiltered density.
+        // At this point, we apply the filter to the unfiltered
+        // density, and apply the adjoint (transpose) operation to the
+        // unfiltered density multiplier, both to the current best
+        // guess for the nonlinear solution. We use this later to tell
+        // us how far off our filtered density is from the filter
+        // applied to the unfiltered density. That is because while at
+        // the solution of the nonlinear problem, we have
+        // $\rho=H\sigma$, but at intermediate iterations, we in
+        // general have $\rho^k\neq H\sigma^k$ and the "residual"
+        // $\rho^k-H\sigma^k$ will then appear as the right hand side
+        // of one of the Newton update equations that we compute
+        // below.
         BlockVector<double> filtered_unfiltered_density_solution = nonlinear_solution;
         BlockVector<double> filter_adjoint_unfiltered_density_multiplier_solution = nonlinear_solution;
         
@@ -974,7 +984,7 @@ namespace SAND {
                         //
                         // The right hand sides of the equations being
                         // driven to 0 give all the KKT conditions
-                        // for finding a local minimum - the descriptions of what
+                        // for finding a local minimum -- the descriptions of what
                         // each individual equation are given with the computations
                         // of the right hand side.
                         
@@ -1080,7 +1090,7 @@ namespace SAND {
                                 -1 * fe_values.JxW(q_point) * upper_slack_multiplier_phi_i * (
                                         -1 * unfiltered_density_phi_j - upper_slack_phi_j);
 
-                        /* Equation 6: Primal feasibility - part with filter added later */
+                        /* Equation 6: Primal feasibility - the part with the filter is added later */
                         cell_matrix(i, j) +=
                                 -1 * fe_values.JxW(q_point) * unfiltered_density_multiplier_phi_i * (
                                         density_phi_j);
@@ -1109,8 +1119,11 @@ namespace SAND {
                     // compute the terms for the right hand side
                     // (i.e., the negative residual):
 
-                    /* Equation 0 - This equation, along with equations 1 and 2, are the variational derivatives of the lagrangian
-                      * with respect to the decision variables - the density, displacement, and unfiltered density*/
+                    /* Equation 0: This equation, along with
+                       equations 1 and 2, are the variational
+                       derivatives of the Lagrangian with respect to
+                       the decision variables - the density,
+                       displacement, and unfiltered density.  */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (
                                     density_penalty_exponent *
@@ -1143,8 +1156,10 @@ namespace SAND {
 
 
 
-                    /* Equation 3; boundary term will again be dealt with below. This equation being driven to 0
-                     * ensures that the elasticity equation is met as a constraint*/
+                    /* Equation 3; boundary term will again be dealt
+                       with below. This equation being driven to 0
+                       ensures that the elasticity equation is met as
+                       a constraint. */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (
                                     std::pow(old_density_values[q_point], density_penalty_exponent)
@@ -1154,30 +1169,38 @@ namespace SAND {
                                                                    * old_displacement_symmgrads[q_point]))
                             );
 
-                    /* Equation 4 -this equation makes sets the lower slack variable equal to the unfiltered density,
-                     * giving a minimum density of 0.*/
+                    /* Equation 4: This equation sets the lower slack
+                       variable equal to the unfiltered density,
+                       giving a minimum density of 0. */
                     cell_rhs(i) +=
                             fe_values.JxW(q_point) *
                             (lower_slack_multiplier_phi_i
                              * (old_unfiltered_density_values[q_point] - old_lower_slack_values[q_point])
                             );
 
-                    /* Equation 5 -this equation makes sets the upper slack variable equal to one minus the unfiltered density*/
+                    /* Equation 5: This equation sets the upper slack
+                       variable equal to one minus the unfiltered
+                       density. */
                     cell_rhs(i) +=
                             fe_values.JxW(q_point) * (
                                     upper_slack_multiplier_phi_i * (1 - old_unfiltered_density_values[q_point]
                                                                     - old_upper_slack_values[q_point]));
 
-                    /* Equation 6 - This is the difference between the density and the filter applied to the unfiltered density.
-                     * This being driven to 0 by the newton steps ensures that the filter is applied correctly*/
+                    /* Equation 6: This is the difference between the
+                       density and the filter applied to the unfiltered
+                       density.  This being driven to 0 by the Newton
+                       steps ensures that the filter is applied
+                       correctly. */
                     cell_rhs(i) +=
                             fe_values.JxW(q_point) * (
                                     unfiltered_density_multiplier_phi_i
                                     * (old_density_values[q_point] - filtered_unfiltered_density_values[q_point])
                             );
 
-                    /* Equation 7 - This along with equation 8 give the requirement that $s*z = \alpha$ for the
-                     * barrier size alpha, and gives complementary slackness from KKT conditions when $\alpha$ goes to 0*/
+                    /* Equation 7: This along with equation 8 give the
+                       requirement that $s*z = \alpha$ for the barrier
+                       size alpha, and gives complementary slackness
+                       from KKT conditions when $\alpha$ goes to 0. */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (lower_slack_phi_i
                                                            * (old_lower_slack_multiplier_values[q_point] -
@@ -1240,10 +1263,14 @@ namespace SAND {
         }
 
 
-//Here we use the filter matrix we have already constructed. We only need to integrate this filter applied to test functions,
-// which are piecewise constant, and so the integration becomes a simple multiplication by the measure of the cell.
-// Iterating over the pre-made filter matrix allows us to use the information about which cells are in or out of the filter
-// without repeatedly checking neighbor cells again.
+        // Here we use the filter matrix we have already
+        // constructed. We only need to integrate this filter applied
+        // to test functions, which are piecewise constant, and so the
+        // integration becomes a simple multiplication by the measure
+        // of the cell.  Iterating over the pre-made filter matrix
+        // allows us to use the information about which cells are in
+        // or out of the filter without repeatedly checking neighbor
+        // cells again.
         for (const auto &cell : dof_handler.active_cell_iterators()) {
             const unsigned int i = cell->active_cell_index();
             for (typename SparseMatrix<double>::iterator iter = filter_matrix.begin(
@@ -1508,8 +1535,11 @@ namespace SAND {
                             fe_values[density_upper_slack_multipliers].value(i,
                                                                              q_point);
 
-                    /* Equation 0 - This equation, along with equations 1 and 2, are the variational derivatives of the lagrangian
-                     * with respect to the decision variables - the density, displacement, and unfiltered density*/
+                    /* Equation 0: This equation, along with equations
+                       1 and 2, are the variational derivatives of the
+                       lagrangian with respect to the decision
+                       variables - the density, displacement, and
+                       unfiltered density. */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (
                                     density_penalty_exponent *
@@ -1520,7 +1550,7 @@ namespace SAND {
                                                                    * old_displacement_multiplier_symmgrads[q_point]))
                                     - density_phi_i * old_unfiltered_density_multiplier_values[q_point]);
 
-                    /* Equation 1; boundary terms will be added further down below. */
+                    /* Equation 1; the boundary terms will be added further down below. */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (
                                     std::pow(old_density_values[q_point], density_penalty_exponent)
@@ -1542,8 +1572,10 @@ namespace SAND {
 
 
 
-                    /* Equation 3; boundary term will again be dealt with below. This equation being driven to 0
-                     * ensures that the elasticity equation is met as a constraint*/
+                    /* Equation 3; boundary term will again be dealt
+                       with below. This equation being driven to 0
+                       ensures that the elasticity equation is met as
+                       a constraint. */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (
                                     std::pow(old_density_values[q_point], density_penalty_exponent)
@@ -1553,30 +1585,38 @@ namespace SAND {
                                                                    * old_displacement_symmgrads[q_point]))
                             );
 
-                    /* Equation 4 -this equation makes sets the lower slack variable equal to the unfiltered density,
-                     * giving a minimum density of 0.*/
+                    /* Equation 4: This equation sets the lower slack
+                       variable equal to the unfiltered density,
+                       giving a minimum density of 0. */
                     cell_rhs(i) +=
                             fe_values.JxW(q_point) *
                             (lower_slack_multiplier_phi_i
                              * (old_unfiltered_density_values[q_point] - old_lower_slack_values[q_point])
                             );
 
-                    /* Equation 5 -this equation makes sets the upper slack variable equal to one minus the unfiltered density*/
+                    /* Equation 5: This equation sets the upper slack
+                       variable equal to one minus the unfiltered
+                       density. */
                     cell_rhs(i) +=
                             fe_values.JxW(q_point) * (
                                     upper_slack_multiplier_phi_i * (1 - old_unfiltered_density_values[q_point]
                                        - old_upper_slack_values[q_point]));
 
-                    /* Equation 6 - This is the difference between the density and the filter applied to the unfiltered density.
-                     * This being driven to 0 by the newton steps ensures that the filter is applied correctly*/
+                    /* Equation 6: This is the difference between the
+                       density and the filter applied to the
+                       unfiltered density.  This being driven to 0 by
+                       the newton steps ensures that the filter is
+                       applied correctly. */
                     cell_rhs(i) +=
                             fe_values.JxW(q_point) * (
                                     unfiltered_density_multiplier_phi_i
                                     * (old_density_values[q_point] - filtered_unfiltered_density_values[q_point])
                             );
 
-                    /* Equation 7 - This along with equation 8 give the requirement that $s*z = \alpha$ for the
-                     * barrier size alpha, and gives complementary slackness from KKT conditions when $\alpha$ goes to 0*/
+                    /* Equation 7: This along with equation 8 give the
+                       requirement that $s*z = \alpha$ for the barrier
+                       size alpha, and gives complementary slackness
+                       from KKT conditions when $\alpha$ goes to 0. */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (lower_slack_phi_i
                                                            * (old_lower_slack_multiplier_values[q_point] -
@@ -2141,7 +2181,7 @@ namespace SAND {
                     //if current merit is less than watchdog merit, or if stretch merit is less than earlier goal merit
                     if(calculate_exact_merit(current_state,barrier_size) < calculate_exact_merit(watchdog_state,barrier_size) || calculate_exact_merit(stretch_state,barrier_size) < goal_merit)
                     {
-                        std::cout << "Taking scaled step from end of Watchdog" << std::endl;
+                        std::cout << "Taking scaled step from end of watchdog" << std::endl;
                         current_state = stretch_state;
                         iteration_number = iteration_number + max_uphill_steps + 1;
                     }
