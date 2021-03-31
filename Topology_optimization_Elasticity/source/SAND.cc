@@ -1762,7 +1762,6 @@ namespace SAND {
 
         //Going to update penalty_multiplier in here too. Taken from 18.36 in Nocedal Wright
 
-        double test_penalty_multiplier;
         double hess_part = 0;
         double grad_part = 0;
         double constraint_norm = 0;
@@ -1790,16 +1789,14 @@ namespace SAND {
             constraint_norm =   constraint_norm + system_rhs.block(i).linfty_norm();
         }
 
+
+        double test_penalty_multiplier;
         if (hess_part > 0)
             test_penalty_multiplier = (grad_part + .5 * hess_part)/(.05 * constraint_norm);
         else
             test_penalty_multiplier = (grad_part)/(.05 * constraint_norm);
         
-        if (test_penalty_multiplier > penalty_multiplier)
-        {
-            penalty_multiplier = test_penalty_multiplier;
-            std::cout << "    penalty multiplier updated to " << penalty_multiplier << std::endl;
-        }
+        penalty_multiplier = std::max (penalty_multiplier, test_penalty_multiplier);
 
         const auto max_step_sizes= calculate_max_step_size(state,step,barrier_size);
         const double step_size_s = max_step_sizes.first;
@@ -2154,7 +2151,8 @@ namespace SAND {
             while(!converged && iteration_number < 10000)
             {
               std::cout << "  Starting inner step in iteration " << iteration_number
-                        << " with barrier parameter " << barrier_size << std::endl;
+                        << " with merit function penalty multiplier " << penalty_multiplier
+                        << std::endl;
               
                 bool found_step = false;
 
@@ -2194,15 +2192,19 @@ namespace SAND {
                     }
                     //end for
                 }
-                //if found step = false
-                if (!found_step)
+                if (found_step == false)
                 {
                     //Compute step from current state
                   const BlockVector<double> update_step = find_max_step(current_state,barrier_size);
-                    //find step length so that merit of stretch state - sized step from current length - is less than merit of (current state + descent requirement * linear derivative of merit of current state in direction of current step)
-                    //update stretch state with found step length
+                    //find step length so that merit of stretch state
+                    //- sized step from current length - is less than
+                    //merit of (current state + descent requirement *
+                    //linear derivative of merit of current state in
+                    //direction of current step) update stretch state
+                    //with found step length
                     const BlockVector<double> stretch_state = take_scaled_step(current_state, update_step, descent_requirement, barrier_size);
-                    //if current merit is less than watchdog merit, or if stretch merit is less than earlier goal merit
+                    //if current merit is less than watchdog merit, or
+                    //if stretch merit is less than earlier goal merit
                     if(calculate_exact_merit(current_state,barrier_size) < calculate_exact_merit(watchdog_state,barrier_size) || calculate_exact_merit(stretch_state,barrier_size) < goal_merit)
                     {
                         std::cout << "    Taking scaled step from end of watchdog" << std::endl;
