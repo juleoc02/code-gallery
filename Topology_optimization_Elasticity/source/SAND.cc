@@ -2237,26 +2237,22 @@ namespace SAND {
                 converged = check_convergence(current_state, barrier_size);
                 //end while
             }
+
+
+            // At the end of the outer loop, we have to update the
+            // barrier parameter, for which we use the following
+            // formula. The rest of the function is then simply about
+            // writing the final "design" as an STL file for use in a
+            // 3d printer, and to output some timing information.
             const double barrier_size_multiplier = .8;
             const double barrier_size_exponent = 1.2;
 
-            if (barrier_size * barrier_size_multiplier < std::pow(barrier_size, barrier_size_exponent))
-            {
-              if (barrier_size * barrier_size_multiplier < min_barrier_size)
-                barrier_size = min_barrier_size;
-              else
-                barrier_size = barrier_size * barrier_size_multiplier;
-            }
-            else
-            {
-              if (std::pow(barrier_size, barrier_size_exponent) < min_barrier_size)
-                barrier_size = min_barrier_size;
-              else
-                barrier_size = std::pow(barrier_size, barrier_size_exponent);
-            }
+            barrier_size = std::max (std::min(barrier_size * barrier_size_multiplier,
+                                              std::pow(barrier_size, barrier_size_exponent)),
+                                     min_barrier_size);
 
             std::cout << std::endl;
-        }//end while
+        } /* end of the outer while loop */
 
         write_as_stl();
         timer.print_summary ();
