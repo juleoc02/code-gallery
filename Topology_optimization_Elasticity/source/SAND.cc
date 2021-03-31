@@ -1798,7 +1798,7 @@ namespace SAND {
         if (test_penalty_multiplier > penalty_multiplier)
         {
             penalty_multiplier = test_penalty_multiplier;
-            std::cout << "penalty multiplier updated to " << penalty_multiplier << std::endl;
+            std::cout << "    penalty multiplier updated to " << penalty_multiplier << std::endl;
         }
 
         const auto max_step_sizes= calculate_max_step_size(state,step,barrier_size);
@@ -1851,7 +1851,7 @@ namespace SAND {
     {
                const double convergence_condition = 1e-2;
                const BlockVector<double> test_rhs = calculate_test_rhs(state,barrier_size);
-               std::cout << "current rhs norm is " << test_rhs.linfty_norm() << std::endl;
+               std::cout << "    current rhs norm is " << test_rhs.linfty_norm() << std::endl;
                if (test_rhs.l1_norm()<convergence_condition * barrier_size)
                {
                    return true;
@@ -2098,10 +2098,24 @@ namespace SAND {
 
   // @sect3{The run() function driving the overall algorithm}
 
-    // Contains watchdog algorithm
+    // This function finally provides the overall driver logic. It is,
+    // in the grand scheme of things, a rather complicated function
+    // primarily because the optimization algorithm is difficult: It
+    // isn't just about finding a Newton direction like in step-15 and
+    // then going a fixed distance in this direction any more, but
+    // instead about (i) determining what the optimal log-barrier
+    // penalty parameter should be in the current step, (ii) a
+    // complicated algorithm to determine how far we want to go, and
+    // other ingredients. Let us see how we can break this down into
+    // smaller chunks in the following documentation.
+  //
+  // The function starts out simple enough with first setting up the
+  // mesh, the DoFHandler, and then the various linear algebra objects
+  // necessary for the following:
     template<int dim>
     void
-    SANDTopOpt<dim>::run() {
+    SANDTopOpt<dim>::run()
+    {
         {
           TimerOutput::Scope t(timer, "setup");
           
@@ -2114,27 +2128,37 @@ namespace SAND {
           setup_block_system();
           setup_filter_matrix();
         }
-        
+
+        // We then set a number of parameters that affect the
+        // log-barrier and line search components of the optimization
+        // algorithm:
         double barrier_size = 25;
         const double min_barrier_size = .0005;
         
         const unsigned int max_uphill_steps = 8;
-        unsigned int iteration_number = 0;
         const double descent_requirement = .0001;
-        //while barrier value above minimal value and total iterations under some value
-        BlockVector<double> current_state = nonlinear_solution;
-        BlockVector<double> current_step;
-        
 
-        while((barrier_size > .0005 || !check_convergence(current_state, barrier_size)) && iteration_number < 10000)
+
+        unsigned int iteration_number = 0;
+        BlockVector<double> current_state = nonlinear_solution;
+        while(((barrier_size > .0005)
+               ||
+               !check_convergence(current_state, barrier_size))
+              &&
+              (iteration_number < 10000))
         {
+          std::cout << "Starting outer step in iteration " << iteration_number
+                    << " with barrier parameter " << barrier_size << std::endl;
+          
             bool converged = false;
-            //while not converged
             while(!converged && iteration_number < 10000)
             {
+              std::cout << "  Starting inner step in iteration " << iteration_number
+                        << " with barrier parameter " << barrier_size << std::endl;
+              
                 bool found_step = false;
-                //save current state as watchdog state
 
+                // save current state as watchdog state
                 const BlockVector<double> watchdog_state = current_state;
                 BlockVector<double> watchdog_step;
                 double goal_merit;
@@ -2142,20 +2166,20 @@ namespace SAND {
                 for(unsigned int k = 0; k<max_uphill_steps; ++k)
                 {
                     //compute step from current state  - function from kktSystem
-                    current_step = find_max_step(current_state, barrier_size);
+                  const BlockVector<double> update_step = find_max_step(current_state, barrier_size);
                     // save the first of these as the watchdog step
                     if(k==0)
                     {
-                        watchdog_step = current_step;
+                        watchdog_step = update_step;
                     }
                     //apply full step to current state
-                    current_state=current_state+current_step;
+                    current_state=current_state+update_step;
                     //if merit of current state is less than goal
                     double current_merit = calculate_exact_merit(current_state, barrier_size);
-                    std::cout << "current merit is: " <<current_merit << "  and  ";
+                    std::cout << "    current merit is: " <<current_merit << "  and  ";
                     double merit_derivative = ((calculate_exact_merit(watchdog_state+.0001*watchdog_step,barrier_size) - calculate_exact_merit(watchdog_state,barrier_size ))/.0001);
                     goal_merit = calculate_exact_merit(watchdog_state,barrier_size) + descent_requirement * merit_derivative;
-                    std::cout << "goal merit is "<<goal_merit <<std::endl;
+                    std::cout << "    goal merit is "<<goal_merit <<std::endl;
                     if(current_merit < goal_merit)
                     {
                         //Accept current state
@@ -2163,7 +2187,7 @@ namespace SAND {
                         iteration_number = iteration_number + k + 1;
                         //found step = true
                         found_step = true;
-                        std::cout << "found workable step after " << k+1 << " iterations"<<std::endl;
+                        std::cout << "    found workable step after " << k+1 << " iterations"<<std::endl;
                         //break for loop
                         break;
                         //end if
@@ -2174,20 +2198,20 @@ namespace SAND {
                 if (!found_step)
                 {
                     //Compute step from current state
-                    current_step = find_max_step(current_state,barrier_size);
+                  const BlockVector<double> update_step = find_max_step(current_state,barrier_size);
                     //find step length so that merit of stretch state - sized step from current length - is less than merit of (current state + descent requirement * linear derivative of merit of current state in direction of current step)
                     //update stretch state with found step length
-                    const BlockVector<double> stretch_state = take_scaled_step(current_state, current_step, descent_requirement, barrier_size);
+                    const BlockVector<double> stretch_state = take_scaled_step(current_state, update_step, descent_requirement, barrier_size);
                     //if current merit is less than watchdog merit, or if stretch merit is less than earlier goal merit
                     if(calculate_exact_merit(current_state,barrier_size) < calculate_exact_merit(watchdog_state,barrier_size) || calculate_exact_merit(stretch_state,barrier_size) < goal_merit)
                     {
-                        std::cout << "Taking scaled step from end of watchdog" << std::endl;
+                        std::cout << "    Taking scaled step from end of watchdog" << std::endl;
                         current_state = stretch_state;
                         iteration_number = iteration_number + max_uphill_steps + 1;
                     }
                     else
                     {
-                        std::cout << "Taking scaled step from beginning of watchdog" << std::endl;
+                        std::cout << "    Taking scaled step from beginning of watchdog" << std::endl;
                         //if merit of stretch state is bigger than watchdog merit
                         if (calculate_exact_merit(stretch_state,barrier_size) > calculate_exact_merit(watchdog_state,barrier_size))
                         {
@@ -2218,35 +2242,21 @@ namespace SAND {
 
             if (barrier_size * barrier_size_multiplier < std::pow(barrier_size, barrier_size_exponent))
             {
-                if (barrier_size * barrier_size_multiplier < min_barrier_size)
-                {
-                    barrier_size = min_barrier_size;
-                }
-                else
-                {
-                    barrier_size = barrier_size * barrier_size_multiplier;
-                }
+              if (barrier_size * barrier_size_multiplier < min_barrier_size)
+                barrier_size = min_barrier_size;
+              else
+                barrier_size = barrier_size * barrier_size_multiplier;
             }
             else
             {
-                if (std::pow(barrier_size, barrier_size_exponent) < min_barrier_size)
-                {
-                    barrier_size = min_barrier_size;
-                }
-                else
-                {
-                    barrier_size = std::pow(barrier_size, barrier_size_exponent);
-                }
+              if (std::pow(barrier_size, barrier_size_exponent) < min_barrier_size)
+                barrier_size = min_barrier_size;
+              else
+                barrier_size = std::pow(barrier_size, barrier_size_exponent);
             }
 
-
-
-//            barrier_size = barrier_size * barrier_size_multiplier;
-            std::cout << "barrier size reduced to " << barrier_size << " on iteration number " << iteration_number << std::endl;
-//
-//            penalty_multiplier = 1;
-            //end while
-        }
+            std::cout << std::endl;
+        }//end while
 
         write_as_stl();
         timer.print_summary ();
