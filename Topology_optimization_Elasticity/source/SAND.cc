@@ -2148,6 +2148,28 @@ namespace SAND {
         // where the convergence condition is at the bottom.
         unsigned int iteration_number = 0;
         const unsigned int max_iterations = 10000;
+
+// TODO: It took me quite a while to realize the connection between
+// 'current_state' and 'nonlinear_solution'. You exclusively use the
+// former in this function, and exclusively the latter in the rest of
+// the program. So I started to look at where 'nonlinear_solution' is
+// even set, and found that you do that in 'find_max_step'. That's not
+// great design, for a variety of reasons. First, you set
+// 'nonlinear_solution' at the beginning of 'find_max_step', but that
+// means that 'nonlinear_solution' doesn't actually represent the last
+// computed value of 'current_state' -- if you use the found max step
+// to update 'current_solution', this is never reflected in
+// 'nonlinear_solution'. Second, a function called 'find_max_step' by
+// virtue of its name would be expected to *find* something, not to
+// change the state of the object it belongs to (namely, change the
+// value of 'nonlinear_solution'). I think it would be right for a
+// function with this name to be 'const', but you can't do this right
+// now because the function also updates other stuff. Regardless, I
+// think it would be quite useful to just not create the
+// 'current_state' vector at all and work with 'nonlinear_solution'
+// instead; I won't make that change, though, and leave that to you
+// since it changes the output of the program for the reason mentioned
+// above.
         BlockVector<double> current_state = nonlinear_solution;
         do
         {
@@ -2177,7 +2199,7 @@ namespace SAND {
                         << " with merit function penalty multiplier " << penalty_multiplier
                         << std::endl;
               
-                bool found_step = false;
+                bool watchdog_step_found = false;
 
                 const BlockVector<double> watchdog_state = current_state;
                 BlockVector<double> first_step;
@@ -2207,57 +2229,92 @@ namespace SAND {
 
                   if (current_merit < target_merit)
                     {
-                      found_step = true;
+                      watchdog_step_found = true;
                       std::cout << "    found workable step after " << k+1 << " iterations"<<std::endl;
                       break;
                     }
                 }
 
-                
-                if (found_step == false)
+
+                // The next part of the algorithm then depends on
+                // whether the watchdog loop above succeeded. If it
+                // did, then we are satisfied and no further action is
+                // necessary: We just stay where we are. If, however,
+                // we took the maximal number of unsuccessful steps in
+                // the loop above, then we need to do something else,
+                // and this is what the following code block does.
+                //
+                // Specifically, from the final (unsuccessful) state
+                // of the loop above, we seek one more update
+                // direction and take what is called a "stretch
+                // step". If that stretch state satisfies a condition
+                // involving the merit function, then we go there. On
+                // the other hand, if the stretch state is also
+                // unacceptable (as all of the watchdog steps above
+                // were), then we discard all of the watchdog steps
+                // taken above and start over again where we had
+                // started the watchdog iterations -- that places was
+                // stored in the `watchdog_state` variable above. More
+                // specifically, the conditions below first test
+                // whether we take a step from `watchdog_state` in
+                // direction `first_step`, or whether we can do one
+                // more update from the stretch state to find a new
+                // place. It is possible that neither of these is
+                // actually better than the state we started from at
+                // the beginning of the watchdog algorithm, but even
+                // if that is so, that place clearly was a difficult
+                // place to be in, and getting away to start the next
+                // iteration from another place might be a useful
+                // strategy to eventually converge.
+                //
+                // We keep repeating the watchdog steps above along
+                // with the logic below until this inner iteration is
+                // finally converged (or if we run up against the
+                // maximal number of iterations -- where we count the
+                // number of linear solves as iterations and increment
+                // the counter every time we call `find_max_step()`
+                // since that is where the linear solve actually
+                // happens). In any case, at the end of each of these
+                // inner iterations we also output the solution in a
+                // form suitable for visualization.
+                if (watchdog_step_found == false)
                 {
-                    //Compute step from current state
+                  ++iteration_number;
                   const BlockVector<double> update_step = find_max_step(current_state,barrier_size);
-                    //find step length so that merit of stretch state
-                    //- sized step from current length - is less than
-                    //merit of (current state + descent requirement *
-                    //linear derivative of merit of current state in
-                    //direction of current step) update stretch state
-                    //with found step length
                     const BlockVector<double> stretch_state = take_scaled_step(current_state, update_step, descent_requirement, barrier_size);
-                    //if current merit is less than watchdog merit, or
-                    //if stretch merit is less than earlier goal merit
-                    if(calculate_exact_merit(current_state,barrier_size) < calculate_exact_merit(watchdog_state,barrier_size) || calculate_exact_merit(stretch_state,barrier_size) < target_merit)
+
+//TODO: in the first of the following conditions, did you mean to use
+//calculate_exact_merit(stretch_state, barrier_size) instead of
+//calculate_exact_merit(current_state, barrier_size)? I'm asking
+//because you go to your stretch state even if *current_state*
+//satisfies the first condition, regardless of what the stretch_state
+//you go to actually is.
+                    if((calculate_exact_merit(current_state, barrier_size) <
+                        calculate_exact_merit(watchdog_state, barrier_size))
+                       ||
+                       (calculate_exact_merit(stretch_state, barrier_size) < target_merit))
                     {
                         std::cout << "    Taking scaled step from end of watchdog" << std::endl;
                         current_state = stretch_state;
-                        iteration_number = iteration_number + max_uphill_steps + 1;
                     }
                     else
                     {
                         std::cout << "    Taking scaled step from beginning of watchdog" << std::endl;
-                        //if merit of stretch state is bigger than watchdog merit
-                        if (calculate_exact_merit(stretch_state,barrier_size) > calculate_exact_merit(watchdog_state,barrier_size))
+                        if (calculate_exact_merit(stretch_state,barrier_size) >
+                            calculate_exact_merit(watchdog_state,barrier_size))
                         {
-                            //find step length from watchdog state that meets descent requirement
                             current_state = take_scaled_step(watchdog_state, first_step, descent_requirement, barrier_size);
-                            //update iteration count
-                            iteration_number = iteration_number +  max_uphill_steps + 1;
                         }
                         else
                         {
-                            //calculate direction from stretch state
+                          ++iteration_number;
                             const BlockVector<double> stretch_step = find_max_step(stretch_state,barrier_size);
-                            //find step length from stretch state that meets descent requirement
                             current_state = take_scaled_step(stretch_state, stretch_step, descent_requirement,barrier_size);
-                            //update iteration count
-                            iteration_number = iteration_number + max_uphill_steps + 2;
                         }
                     }
                 }
-                //output current state
+                
                 output_results(iteration_number);
-
             }
             while ((iteration_number < max_iterations)
                    &&
@@ -2289,7 +2346,6 @@ namespace SAND {
         write_as_stl();
         timer.print_summary ();
     }
-
 } // namespace SAND
 
 
