@@ -1322,6 +1322,8 @@ namespace SAND {
   // direction computed by solving the linearized (Newton) system is
   // viable and, if so, how far we want to go in this direction.
   
+  // @sect4{Computing step lengths}
+
     // We start with a function that does a binary search to figure
     // out the maximum step that meets the dual feasibility -- that
     // is, how far can we go so that $s>0$ and $z>0$. The function
@@ -1380,10 +1382,13 @@ namespace SAND {
         return {step_size_s_low, step_size_z_low};
     }
 
+
+  // @sect4{Computing residuals}
+
   // The next function computes a right hand side vector linearized
   // around a "test solution vector" that we can use to look at the
   // magnitude of the KKT conditions.  This is then used for testing
-  // the convergence before shrinking barrier size, as well as in the
+  // the convergence before shrinking the barrier size, as well as in the
   // calculation of the $l_1$ merit.
   //
   // The function is lengthy and complicated, but it is really just a
@@ -1672,6 +1677,8 @@ namespace SAND {
     }
 
 
+  // @sect4{Computing the merit function}
+
   // The algorithm we use herein uses a "watchdog" strategy to
   // determine where and how far to go from the current iterate.  We
   // base the watchdog strategy on an exact $l_1$ merit function. This
@@ -1751,6 +1758,8 @@ namespace SAND {
 
 
 
+  // @sect4{Finding a search direction}
+
   // Next up is the function that actually computes a search direction
   // starting at the current state (passed as the first argument) and
   // returns the resulting vector. To this end, the function first
@@ -1767,15 +1776,17 @@ namespace SAND {
     {
         nonlinear_solution = state;
         assemble_system(barrier_size);
-        const BlockVector<double> step = solve();
+        BlockVector<double> step = solve();
 
-        //Going to update penalty_multiplier in here too. Taken from 18.36 in Nocedal Wright
+//TODO: This is conceptually awkward. You are updating the penalty parameter based on the update direction 'step' you are computing. But at this point, you have not decided that 'step' is even a useful direction, and in any case the function here is only responsible for computing a direction, not deciding what the overall algorithm is going to do with the direction. As such, it seems strange that you would update some global state of the program based on only computing the direction here. Is this really what the algorithm does?
 
+        //Going to update penalty_multiplier in here too. Taken from (18.36) in Nocedal Wright
+
+        const std::vector<unsigned int> decision_variables = {SolutionBlocks::density,
+                                                              SolutionBlocks::displacement,
+                                                              SolutionBlocks::unfiltered_density};
         double hess_part = 0;
         double grad_part = 0;
-        double constraint_norm = 0;
-
-        const std::vector<unsigned int> decision_variables = {SolutionBlocks::density, SolutionBlocks::displacement, SolutionBlocks::unfiltered_density};
         for(const unsigned int decision_variable_i : decision_variables)
         {
             for(const unsigned int decision_variable_j : decision_variables)
@@ -1789,14 +1800,13 @@ namespace SAND {
             grad_part -= system_rhs.block(decision_variable_i)*step.block(decision_variable_i);
         }
 
-        const std::vector<unsigned int> equality_constraints = {SolutionBlocks::displacement_multiplier,
-                                                                SolutionBlocks::unfiltered_density_multiplier,
-                                                                SolutionBlocks::density_lower_slack_multiplier,
-                                                                SolutionBlocks::density_upper_slack_multiplier};
-        for(unsigned int i : equality_constraints)
-        {
-            constraint_norm =   constraint_norm + system_rhs.block(i).linfty_norm();
-        }
+        const std::vector<unsigned int> equality_constraint_multipliers = {SolutionBlocks::displacement_multiplier,
+                                                                           SolutionBlocks::unfiltered_density_multiplier,
+                                                                           SolutionBlocks::density_lower_slack_multiplier,
+                                                                           SolutionBlocks::density_upper_slack_multiplier};
+        double constraint_norm = 0;
+        for(unsigned int multiplier_i : equality_constraint_multipliers)
+          constraint_norm += system_rhs.block(multiplier_i).linfty_norm();
 
 
         double test_penalty_multiplier;
@@ -1807,24 +1817,29 @@ namespace SAND {
         
         penalty_multiplier = std::max (penalty_multiplier, test_penalty_multiplier);
 
-        const auto max_step_sizes= calculate_max_step_size(state,step,barrier_size);
+        // Based on all of this, we can now compute step sizes for the
+        // primal and dual (Lagrange multiplier) variables. Once we
+        // have these, we scale the components of the solution vector,
+        // and that is what this function returns.
+        const std::pair<double,double> max_step_sizes = calculate_max_step_size(state, step, barrier_size);
         const double step_size_s = max_step_sizes.first;
         const double step_size_z = max_step_sizes.second;
-        BlockVector<double> max_step(9);
+        
+        step.block(SolutionBlocks::density) *= step_size_s;
+        step.block(SolutionBlocks::displacement) *= step_size_s;
+        step.block(SolutionBlocks::unfiltered_density) *= step_size_s;
+        step.block(SolutionBlocks::displacement_multiplier) *= step_size_z;
+        step.block(SolutionBlocks::unfiltered_density_multiplier) *= step_size_z;
+        step.block(SolutionBlocks::density_lower_slack) *= step_size_s;
+        step.block(SolutionBlocks::density_lower_slack_multiplier) *= step_size_z;
+        step.block(SolutionBlocks::density_upper_slack) *= step_size_s;
+        step.block(SolutionBlocks::density_upper_slack_multiplier) *= step_size_z;
 
-        max_step.block(SolutionBlocks::density) = step_size_s * step.block(SolutionBlocks::density);
-        max_step.block(SolutionBlocks::displacement) = step_size_s * step.block(SolutionBlocks::displacement);
-        max_step.block(SolutionBlocks::unfiltered_density) = step_size_s * step.block(SolutionBlocks::unfiltered_density);
-        max_step.block(SolutionBlocks::displacement_multiplier) = step_size_z * step.block(SolutionBlocks::displacement_multiplier);
-        max_step.block(SolutionBlocks::unfiltered_density_multiplier) = step_size_z * step.block(SolutionBlocks::unfiltered_density_multiplier);
-        max_step.block(SolutionBlocks::density_lower_slack) = step_size_s * step.block(SolutionBlocks::density_lower_slack);
-        max_step.block(SolutionBlocks::density_lower_slack_multiplier) = step_size_z * step.block(SolutionBlocks::density_lower_slack_multiplier);
-        max_step.block(SolutionBlocks::density_upper_slack) = step_size_s * step.block(SolutionBlocks::density_upper_slack);
-        max_step.block(SolutionBlocks::density_upper_slack_multiplier) = step_size_z * step.block(SolutionBlocks::density_upper_slack_multiplier);
-
-        return max_step;
+        return step;
     }
 
+
+  
     // This is my back-stepping algorithm for a line search - keeps shrinking step size until it finds a step where the merit is decreased.
 
     template<int dim>
