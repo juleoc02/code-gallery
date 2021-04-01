@@ -160,28 +160,28 @@ namespace SAND {
         setup_filter_matrix();
 
         void
-        assemble_system(const double barrier_size);
+        assemble_system();
 
         BlockVector<double>
         solve();
 
         std::pair<double,double>
-        calculate_max_step_size(const BlockVector<double> &state, const BlockVector<double> &step, const double barrier_size) const;
+        calculate_max_step_size(const BlockVector<double> &state, const BlockVector<double> &step) const;
 
         BlockVector<double>
-        calculate_test_rhs(const BlockVector<double> &test_solution, const double barrier_size) const;
+        calculate_test_rhs(const BlockVector<double> &test_solution) const;
 
         double
-        calculate_exact_merit(const BlockVector<double> &test_solution, const double barrier_size);
+        calculate_exact_merit(const BlockVector<double> &test_solution);
 
         BlockVector<double>
-        find_max_step(const BlockVector<double> &state, const double barrier_size);
+        find_max_step();
 
         BlockVector<double>
-        take_scaled_step(const BlockVector<double> &state, const BlockVector<double> &step, const double descent_requirement,const double barrier_size);
+        take_scaled_step(const BlockVector<double> &state, const BlockVector<double> &step, const double descent_requirement);
 
         bool
-        check_convergence(const BlockVector<double> &state, const double barrier_size);
+        check_convergence(const BlockVector<double> &state);
 
         void
         output_results(const unsigned int j) const;
@@ -215,6 +215,7 @@ namespace SAND {
         const double density_penalty_exponent;
         const double filter_r;
         double penalty_multiplier;
+        double barrier_size;
 
 
         TimerOutput timer;
@@ -771,7 +772,7 @@ namespace SAND {
   // looked at step-22.
     template<int dim>
     void
-    SANDTopOpt<dim>::assemble_system(const double barrier_size) {
+    SANDTopOpt<dim>::assemble_system() {
         TimerOutput::Scope t(timer, "assembly");
         
         system_matrix = 0;
@@ -1331,7 +1332,7 @@ namespace SAND {
     // variables.
     template<int dim>
     std::pair<double,double>
-    SANDTopOpt<dim>::calculate_max_step_size(const BlockVector<double> &state, const BlockVector<double> &step, const double barrier_size) const {
+    SANDTopOpt<dim>::calculate_max_step_size(const BlockVector<double> &state, const BlockVector<double> &step) const {
 
         double fraction_to_boundary;
         const double min_fraction_to_boundary = .8;
@@ -1396,7 +1397,7 @@ namespace SAND {
   // function above did.
     template<int dim>
     BlockVector<double>
-    SANDTopOpt<dim>::calculate_test_rhs(const BlockVector<double> &test_solution, const double barrier_size) const {
+    SANDTopOpt<dim>::calculate_test_rhs(const BlockVector<double> &test_solution) const {
         BlockVector<double> test_rhs;
         test_rhs.reinit (system_rhs); /* a zero vector with size and blocking of system_rhs */
 
@@ -1694,7 +1695,7 @@ namespace SAND {
   // parts in turn:
     template<int dim>
     double
-    SANDTopOpt<dim>::calculate_exact_merit(const BlockVector<double> &test_solution, const double barrier_size)
+    SANDTopOpt<dim>::calculate_exact_merit(const BlockVector<double> &test_solution)
     {
        TimerOutput::Scope t(timer, "merit function");
 
@@ -1742,7 +1743,7 @@ namespace SAND {
        // components that correspond to Lagrange mulipliers. We add
        // those to the objective function computed above, and return
        // the sum at the bottom:
-        const BlockVector<double> test_rhs = calculate_test_rhs(test_solution, barrier_size);
+        const BlockVector<double> test_rhs = calculate_test_rhs(test_solution);
 
         const double elasticity_constraint_merit = penalty_multiplier * test_rhs.block(SolutionBlocks::displacement_multiplier).l1_norm();
         const double filter_constraint_merit = penalty_multiplier * test_rhs.block(SolutionBlocks::unfiltered_density_multiplier).l1_norm();
@@ -1771,16 +1772,16 @@ namespace SAND {
 
     template<int dim>
     BlockVector<double>
-    SANDTopOpt<dim>::find_max_step(const BlockVector<double> &state,
-                                   const double barrier_size)
+    SANDTopOpt<dim>::find_max_step()
     {
-        nonlinear_solution = state;
-        assemble_system(barrier_size);
+        assemble_system();
         BlockVector<double> step = solve();
 
-//TODO: This is conceptually awkward. You are updating the penalty parameter based on the update direction 'step' you are computing. But at this point, you have not decided that 'step' is even a useful direction, and in any case the function here is only responsible for computing a direction, not deciding what the overall algorithm is going to do with the direction. As such, it seems strange that you would update some global state of the program based on only computing the direction here. Is this really what the algorithm does?
-
         //Going to update penalty_multiplier in here too. Taken from (18.36) in Nocedal Wright
+        //In essence, a larger penalty multiplier makes us consider the constraints more.
+        //Looking at the hessian and gradient with respect to the step we want to take with our decision variables,
+        // and comparing that to the norm of our constraint error gives us a way to ensure that our
+        // merit function is "exact" - that is, it has a minimum in the same location that the objective function does.
 
         const std::vector<unsigned int> decision_variables = {SolutionBlocks::density,
                                                               SolutionBlocks::displacement,
@@ -1821,7 +1822,7 @@ namespace SAND {
         // primal and dual (Lagrange multiplier) variables. Once we
         // have these, we scale the components of the solution vector,
         // and that is what this function returns.
-        const std::pair<double,double> max_step_sizes = calculate_max_step_size(state, step, barrier_size);
+        const std::pair<double,double> max_step_sizes = calculate_max_step_size(nonlinear_solution, step);
         const double step_size_s = max_step_sizes.first;
         const double step_size_z = max_step_sizes.second;
 
@@ -1844,13 +1845,13 @@ namespace SAND {
 
     template<int dim>
     BlockVector<double>
-    SANDTopOpt<dim>::take_scaled_step(const BlockVector<double> &state,const BlockVector<double> &max_step,const double descent_requirement, const double barrier_size)
+    SANDTopOpt<dim>::take_scaled_step(const BlockVector<double> &state,const BlockVector<double> &max_step,const double descent_requirement)
     {
         double step_size = 1;
             for(unsigned int k = 0; k<10; ++k)
             {
-                const double merit_derivative = (calculate_exact_merit(state + .0001 * max_step,barrier_size) - calculate_exact_merit(state,barrier_size))/.0001;
-                if(calculate_exact_merit(state + step_size * max_step,barrier_size) <calculate_exact_merit(state,barrier_size) + step_size * descent_requirement * merit_derivative )
+                const double merit_derivative = (calculate_exact_merit(state + .0001 * max_step) - calculate_exact_merit(state))/.0001;
+                if(calculate_exact_merit(state + step_size * max_step) <calculate_exact_merit(state) + step_size * descent_requirement * merit_derivative )
                 {
                     break;
                 }
@@ -1868,10 +1869,9 @@ namespace SAND {
     // Checks to see if the KKT conditions are sufficiently met to lower barrier size.
     template<int dim>
     bool
-    SANDTopOpt<dim>::check_convergence(const BlockVector<double> &state,
-                                       const double barrier_size)
+    SANDTopOpt<dim>::check_convergence(const BlockVector<double> &state)
     {
-      const BlockVector<double> test_rhs = calculate_test_rhs(state,barrier_size);
+      const BlockVector<double> test_rhs = calculate_test_rhs(state);
       const double test_rhs_norm = test_rhs.l1_norm();
 
       const double convergence_condition = 1e-2;
@@ -2154,7 +2154,7 @@ namespace SAND {
         // We then set a number of parameters that affect the
         // log-barrier and line search components of the optimization
         // algorithm:
-        double barrier_size = 25;
+        barrier_size = 25;
         const double min_barrier_size = .0005;
         
         const unsigned int max_uphill_steps = 8;
@@ -2232,19 +2232,19 @@ namespace SAND {
                 {
                   ++iteration_number;
                   const BlockVector<double> update_step
-                    = find_max_step(current_state, barrier_size);
+                    = find_max_step();
 
                   if (k==0)
                     {
                       first_step = update_step;
-                       merit_derivative = ((calculate_exact_merit(watchdog_state+.0001*first_step, barrier_size)
-                                                    - calculate_exact_merit(watchdog_state, barrier_size))/.0001);
+                       merit_derivative = ((calculate_exact_merit(watchdog_state+.0001*first_step)
+                                                    - calculate_exact_merit(watchdog_state))/.0001);
                        target_merit
-                         = calculate_exact_merit(watchdog_state, barrier_size) + descent_requirement * merit_derivative;
+                         = calculate_exact_merit(watchdog_state) + descent_requirement * merit_derivative;
                     }
 
-                  current_state += update_step;
-                  const double current_merit = calculate_exact_merit(current_state, barrier_size);
+                  nonlinear_solution/*current_state*/ += update_step;
+                  const double current_merit = calculate_exact_merit(nonlinear_solution/*current_state*/);
 
                   std::cout << "    current watchdog state merit is: " << current_merit
                             << "; target merit is " << target_merit << std::endl;
@@ -2302,36 +2302,31 @@ namespace SAND {
                 if (watchdog_step_found == false)
                 {
                   ++iteration_number;
-                  const BlockVector<double> update_step = find_max_step(current_state,barrier_size);
-                    const BlockVector<double> stretch_state = take_scaled_step(current_state, update_step, descent_requirement, barrier_size);
+                  const BlockVector<double> update_step = find_max_step();
+                    const BlockVector<double> stretch_state = take_scaled_step(nonlinear_solution/*current_state*/, update_step, descent_requirement);
 
-//TODO: in the first of the following conditions, did you mean to use
-//calculate_exact_merit(stretch_state, barrier_size) instead of
-//calculate_exact_merit(current_state, barrier_size)? I'm asking
-//because you go to your stretch state even if *current_state*
-//satisfies the first condition, regardless of what the stretch_state
-//you go to actually is.
-                    if((calculate_exact_merit(current_state, barrier_size) <
-                        calculate_exact_merit(watchdog_state, barrier_size))
+                    if((calculate_exact_merit(nonlinear_solution/*current_state*/) <
+                        calculate_exact_merit(watchdog_state))
                        ||
-                       (calculate_exact_merit(stretch_state, barrier_size) < target_merit))
+                       (calculate_exact_merit(stretch_state) < target_merit))
                     {
                         std::cout << "    Taking scaled step from end of watchdog" << std::endl;
-                        current_state = stretch_state;
+                        nonlinear_solution/*current_state*/ = stretch_state;
                     }
                     else
                     {
                         std::cout << "    Taking scaled step from beginning of watchdog" << std::endl;
-                        if (calculate_exact_merit(stretch_state,barrier_size) >
-                            calculate_exact_merit(watchdog_state,barrier_size))
+                        if (calculate_exact_merit(stretch_state) >
+                            calculate_exact_merit(watchdog_state))
                         {
-                            current_state = take_scaled_step(watchdog_state, first_step, descent_requirement, barrier_size);
+                            nonlinear_solution/*current_state*/ = take_scaled_step(watchdog_state, first_step, descent_requirement);
                         }
                         else
                         {
                           ++iteration_number;
-                            const BlockVector<double> stretch_step = find_max_step(stretch_state,barrier_size);
-                            current_state = take_scaled_step(stretch_state, stretch_step, descent_requirement,barrier_size);
+                          nonlinear_solution = stretch_state;
+                            const BlockVector<double> stretch_step = find_max_step();
+                            nonlinear_solution/*current_state*/ = take_scaled_step(current_state, stretch_step, descent_requirement);
                         }
                     }
                 }
@@ -2340,7 +2335,7 @@ namespace SAND {
             }
             while ((iteration_number < max_iterations)
                    &&
-                   (check_convergence(current_state, barrier_size) == false));
+                   (check_convergence(nonlinear_solution/*current_state*/) == false));
 
 
             // At the end of the outer loop, we have to update the
@@ -2361,7 +2356,7 @@ namespace SAND {
         }
         while(((barrier_size > .0005)
                ||
-               (check_convergence(current_state, barrier_size) == false))
+               (check_convergence(nonlinear_solution/*current_state*/) == false))
               &&
               (iteration_number < max_iterations));
 
