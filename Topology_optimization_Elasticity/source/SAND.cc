@@ -162,8 +162,9 @@ namespace SAND {
         void
         assemble_system(const double barrier_size);
 
-        void
+        BlockVector<double>
         solve();
+      
         std::pair<double,double>
         calculate_max_step_size(const BlockVector<double> &state, const BlockVector<double> &step, const double barrier_size) const;
 
@@ -207,7 +208,6 @@ namespace SAND {
         SparsityPattern filter_sparsity_pattern;
         SparseMatrix<double> filter_matrix;
       
-        BlockVector<double> linear_solution;
         BlockVector<double> system_rhs;
         BlockVector<double> nonlinear_solution;
       
@@ -649,7 +649,6 @@ namespace SAND {
         // here use the symbolic component names for individual blocks
         // of the solution vector and, for brevity, use the same trick
         // with `using namespace` as above:
-        linear_solution.reinit(block_sizes);
         nonlinear_solution.reinit(block_sizes);
         system_rhs.reinit(block_sizes);
 
@@ -1299,17 +1298,20 @@ namespace SAND {
     // we simply stick with the direct solver we have here -- the
     // function follows the same structure as used in step-29.
     template<int dim>
-    void
+    BlockVector<double>
     SANDTopOpt<dim>::solve() {
-
-        linear_solution = 0;
         TimerOutput::Scope t(timer, "solver");
+
+      BlockVector<double> linear_solution;
+        linear_solution.reinit(nonlinear_solution);
 
         SparseDirectUMFPACK A_direct;
         A_direct.initialize(system_matrix);
         A_direct.vmult(linear_solution, system_rhs);
 
         constraints.distribute(linear_solution);
+
+        return linear_solution;
     }
 
 
@@ -1748,6 +1750,12 @@ namespace SAND {
     }
 
 
+
+  // Next up is the function that actually computes a search direction
+  // starting at the current state (passed as the first argument) and
+  // returns the resulting vector. To this end, the function first
+  // calls the functions that assemble the linear system that
+  // corresponds to the Newton system, and that solve it.
   
     // This updates the penalty multiplier in the merit function, and then returns the largest scaled feasible step
     // Uses the "calculate_max_step_sizes" function to find the largest feasible step - s>0 and z>0
@@ -1759,8 +1767,7 @@ namespace SAND {
     {
         nonlinear_solution = state;
         assemble_system(barrier_size);
-        solve();
-        const BlockVector<double> step = linear_solution;
+        const BlockVector<double> step = solve();
 
         //Going to update penalty_multiplier in here too. Taken from 18.36 in Nocedal Wright
 
