@@ -24,6 +24,7 @@
 #include <deal.II/base/function.h>
 #include <deal.II/base/tensor.h>
 #include <deal.II/base/timer.h>
+#include <deal.II/base/signaling_nan.h>
 
 #include <deal.II/lac/block_vector.h>
 #include <deal.II/lac/full_matrix.h>
@@ -161,8 +162,9 @@ namespace SAND {
         void
         assemble_system(const double barrier_size);
 
-        void
+        BlockVector<double>
         solve();
+
         std::pair<double,double>
         calculate_max_step_size(const BlockVector<double> &state, const BlockVector<double> &step, const double barrier_size) const;
 
@@ -205,8 +207,7 @@ namespace SAND {
       
         SparsityPattern filter_sparsity_pattern;
         SparseMatrix<double> filter_matrix;
-      
-        BlockVector<double> linear_solution;
+
         BlockVector<double> system_rhs;
         BlockVector<double> nonlinear_solution;
       
@@ -648,7 +649,6 @@ namespace SAND {
         // here use the symbolic component names for individual blocks
         // of the solution vector and, for brevity, use the same trick
         // with `using namespace` as above:
-        linear_solution.reinit(block_sizes);
         nonlinear_solution.reinit(block_sizes);
         system_rhs.reinit(block_sizes);
 
@@ -811,8 +811,18 @@ namespace SAND {
         const Functions::ConstantFunction<dim> mu(1.);
         std::vector<Tensor<1, dim>> rhs_values(n_q_points);
 
-// At this point, we apply the filter to the unfiltered density, and apply the adjoint operation to the unfiltered density multiplier.
-// We use this later to tell us how far off our filtered density is from the filter applied to the unfiltered density.
+        // At this point, we apply the filter to the unfiltered
+        // density, and apply the adjoint (transpose) operation to the
+        // unfiltered density multiplier, both to the current best
+        // guess for the nonlinear solution. We use this later to tell
+        // us how far off our filtered density is from the filter
+        // applied to the unfiltered density. That is because while at
+        // the solution of the nonlinear problem, we have
+        // $\rho=H\sigma$, but at intermediate iterations, we in
+        // general have $\rho^k\neq H\sigma^k$ and the "residual"
+        // $\rho^k-H\sigma^k$ will then appear as the right hand side
+        // of one of the Newton update equations that we compute
+        // below.
         BlockVector<double> filtered_unfiltered_density_solution = nonlinear_solution;
         BlockVector<double> filter_adjoint_unfiltered_density_multiplier_solution = nonlinear_solution;
         
@@ -974,7 +984,7 @@ namespace SAND {
                         //
                         // The right hand sides of the equations being
                         // driven to 0 give all the KKT conditions
-                        // for finding a local minimum - the descriptions of what
+                        // for finding a local minimum -- the descriptions of what
                         // each individual equation are given with the computations
                         // of the right hand side.
                         
@@ -1080,7 +1090,7 @@ namespace SAND {
                                 -1 * fe_values.JxW(q_point) * upper_slack_multiplier_phi_i * (
                                         -1 * unfiltered_density_phi_j - upper_slack_phi_j);
 
-                        /* Equation 6: Primal feasibility - part with filter added later */
+                        /* Equation 6: Primal feasibility - the part with the filter is added later */
                         cell_matrix(i, j) +=
                                 -1 * fe_values.JxW(q_point) * unfiltered_density_multiplier_phi_i * (
                                         density_phi_j);
@@ -1109,8 +1119,11 @@ namespace SAND {
                     // compute the terms for the right hand side
                     // (i.e., the negative residual):
 
-                    /* Equation 0 - This equation, along with equations 1 and 2, are the variational derivatives of the lagrangian
-                      * with respect to the decision variables - the density, displacement, and unfiltered density*/
+                    /* Equation 0: This equation, along with
+                       equations 1 and 2, are the variational
+                       derivatives of the Lagrangian with respect to
+                       the decision variables - the density,
+                       displacement, and unfiltered density.  */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (
                                     density_penalty_exponent *
@@ -1143,8 +1156,10 @@ namespace SAND {
 
 
 
-                    /* Equation 3; boundary term will again be dealt with below. This equation being driven to 0
-                     * ensures that the elasticity equation is met as a constraint*/
+                    /* Equation 3; boundary term will again be dealt
+                       with below. This equation being driven to 0
+                       ensures that the elasticity equation is met as
+                       a constraint. */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (
                                     std::pow(old_density_values[q_point], density_penalty_exponent)
@@ -1154,30 +1169,38 @@ namespace SAND {
                                                                    * old_displacement_symmgrads[q_point]))
                             );
 
-                    /* Equation 4 -this equation makes sets the lower slack variable equal to the unfiltered density,
-                     * giving a minimum density of 0.*/
+                    /* Equation 4: This equation sets the lower slack
+                       variable equal to the unfiltered density,
+                       giving a minimum density of 0. */
                     cell_rhs(i) +=
                             fe_values.JxW(q_point) *
                             (lower_slack_multiplier_phi_i
                              * (old_unfiltered_density_values[q_point] - old_lower_slack_values[q_point])
                             );
 
-                    /* Equation 5 -this equation makes sets the upper slack variable equal to one minus the unfiltered density*/
+                    /* Equation 5: This equation sets the upper slack
+                       variable equal to one minus the unfiltered
+                       density. */
                     cell_rhs(i) +=
                             fe_values.JxW(q_point) * (
                                     upper_slack_multiplier_phi_i * (1 - old_unfiltered_density_values[q_point]
                                                                     - old_upper_slack_values[q_point]));
 
-                    /* Equation 6 - This is the difference between the density and the filter applied to the unfiltered density.
-                     * This being driven to 0 by the newton steps ensures that the filter is applied correctly*/
+                    /* Equation 6: This is the difference between the
+                       density and the filter applied to the unfiltered
+                       density.  This being driven to 0 by the Newton
+                       steps ensures that the filter is applied
+                       correctly. */
                     cell_rhs(i) +=
                             fe_values.JxW(q_point) * (
                                     unfiltered_density_multiplier_phi_i
                                     * (old_density_values[q_point] - filtered_unfiltered_density_values[q_point])
                             );
 
-                    /* Equation 7 - This along with equation 8 give the requirement that $s*z = \alpha$ for the
-                     * barrier size alpha, and gives complementary slackness from KKT conditions when $\alpha$ goes to 0*/
+                    /* Equation 7: This along with equation 8 give the
+                       requirement that $s*z = \alpha$ for the barrier
+                       size alpha, and gives complementary slackness
+                       from KKT conditions when $\alpha$ goes to 0. */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (lower_slack_phi_i
                                                            * (old_lower_slack_multiplier_values[q_point] -
@@ -1240,10 +1263,14 @@ namespace SAND {
         }
 
 
-//Here we use the filter matrix we have already constructed. We only need to integrate this filter applied to test functions,
-// which are piecewise constant, and so the integration becomes a simple multiplication by the measure of the cell.
-// Iterating over the pre-made filter matrix allows us to use the information about which cells are in or out of the filter
-// without repeatedly checking neighbor cells again.
+        // Here we use the filter matrix we have already
+        // constructed. We only need to integrate this filter applied
+        // to test functions, which are piecewise constant, and so the
+        // integration becomes a simple multiplication by the measure
+        // of the cell.  Iterating over the pre-made filter matrix
+        // allows us to use the information about which cells are in
+        // or out of the filter without repeatedly checking neighbor
+        // cells again.
         for (const auto &cell : dof_handler.active_cell_iterators()) {
             const unsigned int i = cell->active_cell_index();
             for (typename SparseMatrix<double>::iterator iter = filter_matrix.begin(
@@ -1271,17 +1298,20 @@ namespace SAND {
     // we simply stick with the direct solver we have here -- the
     // function follows the same structure as used in step-29.
     template<int dim>
-    void
+    BlockVector<double>
     SANDTopOpt<dim>::solve() {
-
-        linear_solution = 0;
         TimerOutput::Scope t(timer, "solver");
+
+      BlockVector<double> linear_solution;
+        linear_solution.reinit(nonlinear_solution);
 
         SparseDirectUMFPACK A_direct;
         A_direct.initialize(system_matrix);
         A_direct.vmult(linear_solution, system_rhs);
 
         constraints.distribute(linear_solution);
+
+        return linear_solution;
     }
 
 
@@ -1292,6 +1322,8 @@ namespace SAND {
   // direction computed by solving the linearized (Newton) system is
   // viable and, if so, how far we want to go in this direction.
   
+  // @sect4{Computing step lengths}
+
     // We start with a function that does a binary search to figure
     // out the maximum step that meets the dual feasibility -- that
     // is, how far can we go so that $s>0$ and $z>0$. The function
@@ -1350,10 +1382,13 @@ namespace SAND {
         return {step_size_s_low, step_size_z_low};
     }
 
+
+  // @sect4{Computing residuals}
+
   // The next function computes a right hand side vector linearized
   // around a "test solution vector" that we can use to look at the
   // magnitude of the KKT conditions.  This is then used for testing
-  // the convergence before shrinking barrier size, as well as in the
+  // the convergence before shrinking the barrier size, as well as in the
   // calculation of the $l_1$ merit.
   //
   // The function is lengthy and complicated, but it is really just a
@@ -1508,8 +1543,11 @@ namespace SAND {
                             fe_values[density_upper_slack_multipliers].value(i,
                                                                              q_point);
 
-                    /* Equation 0 - This equation, along with equations 1 and 2, are the variational derivatives of the lagrangian
-                     * with respect to the decision variables - the density, displacement, and unfiltered density*/
+                    /* Equation 0: This equation, along with equations
+                       1 and 2, are the variational derivatives of the
+                       lagrangian with respect to the decision
+                       variables - the density, displacement, and
+                       unfiltered density. */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (
                                     density_penalty_exponent *
@@ -1520,7 +1558,7 @@ namespace SAND {
                                                                    * old_displacement_multiplier_symmgrads[q_point]))
                                     - density_phi_i * old_unfiltered_density_multiplier_values[q_point]);
 
-                    /* Equation 1; boundary terms will be added further down below. */
+                    /* Equation 1; the boundary terms will be added further down below. */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (
                                     std::pow(old_density_values[q_point], density_penalty_exponent)
@@ -1542,8 +1580,10 @@ namespace SAND {
 
 
 
-                    /* Equation 3; boundary term will again be dealt with below. This equation being driven to 0
-                     * ensures that the elasticity equation is met as a constraint*/
+                    /* Equation 3; boundary term will again be dealt
+                       with below. This equation being driven to 0
+                       ensures that the elasticity equation is met as
+                       a constraint. */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (
                                     std::pow(old_density_values[q_point], density_penalty_exponent)
@@ -1553,30 +1593,38 @@ namespace SAND {
                                                                    * old_displacement_symmgrads[q_point]))
                             );
 
-                    /* Equation 4 -this equation makes sets the lower slack variable equal to the unfiltered density,
-                     * giving a minimum density of 0.*/
+                    /* Equation 4: This equation sets the lower slack
+                       variable equal to the unfiltered density,
+                       giving a minimum density of 0. */
                     cell_rhs(i) +=
                             fe_values.JxW(q_point) *
                             (lower_slack_multiplier_phi_i
                              * (old_unfiltered_density_values[q_point] - old_lower_slack_values[q_point])
                             );
 
-                    /* Equation 5 -this equation makes sets the upper slack variable equal to one minus the unfiltered density*/
+                    /* Equation 5: This equation sets the upper slack
+                       variable equal to one minus the unfiltered
+                       density. */
                     cell_rhs(i) +=
                             fe_values.JxW(q_point) * (
                                     upper_slack_multiplier_phi_i * (1 - old_unfiltered_density_values[q_point]
                                        - old_upper_slack_values[q_point]));
 
-                    /* Equation 6 - This is the difference between the density and the filter applied to the unfiltered density.
-                     * This being driven to 0 by the newton steps ensures that the filter is applied correctly*/
+                    /* Equation 6: This is the difference between the
+                       density and the filter applied to the
+                       unfiltered density.  This being driven to 0 by
+                       the newton steps ensures that the filter is
+                       applied correctly. */
                     cell_rhs(i) +=
                             fe_values.JxW(q_point) * (
                                     unfiltered_density_multiplier_phi_i
                                     * (old_density_values[q_point] - filtered_unfiltered_density_values[q_point])
                             );
 
-                    /* Equation 7 - This along with equation 8 give the requirement that $s*z = \alpha$ for the
-                     * barrier size alpha, and gives complementary slackness from KKT conditions when $\alpha$ goes to 0*/
+                    /* Equation 7: This along with equation 8 give the
+                       requirement that $s*z = \alpha$ for the barrier
+                       size alpha, and gives complementary slackness
+                       from KKT conditions when $\alpha$ goes to 0. */
                     cell_rhs(i) +=
                             -1 * fe_values.JxW(q_point) * (lower_slack_phi_i
                                                            * (old_lower_slack_multiplier_values[q_point] -
@@ -1628,6 +1676,8 @@ namespace SAND {
         return test_rhs;
     }
 
+
+  // @sect4{Computing the merit function}
 
   // The algorithm we use herein uses a "watchdog" strategy to
   // determine where and how far to go from the current iterate.  We
@@ -1707,27 +1757,36 @@ namespace SAND {
     }
 
 
-  
+
+  // @sect4{Finding a search direction}
+
+  // Next up is the function that actually computes a search direction
+  // starting at the current state (passed as the first argument) and
+  // returns the resulting vector. To this end, the function first
+  // calls the functions that assemble the linear system that
+  // corresponds to the Newton system, and that solve it.
+
     // This updates the penalty multiplier in the merit function, and then returns the largest scaled feasible step
     // Uses the "calculate_max_step_sizes" function to find the largest feasible step - s>0 and z>0
 
     template<int dim>
     BlockVector<double>
-    SANDTopOpt<dim>::find_max_step(const BlockVector<double> &state,const double barrier_size)
+    SANDTopOpt<dim>::find_max_step(const BlockVector<double> &state,
+                                   const double barrier_size)
     {
         nonlinear_solution = state;
         assemble_system(barrier_size);
-        solve();
-        const BlockVector<double> step = linear_solution;
+        BlockVector<double> step = solve();
 
-        //Going to update penalty_multiplier in here too. Taken from 18.36 in Nocedal Wright
+//TODO: This is conceptually awkward. You are updating the penalty parameter based on the update direction 'step' you are computing. But at this point, you have not decided that 'step' is even a useful direction, and in any case the function here is only responsible for computing a direction, not deciding what the overall algorithm is going to do with the direction. As such, it seems strange that you would update some global state of the program based on only computing the direction here. Is this really what the algorithm does?
 
-        double test_penalty_multiplier;
+        //Going to update penalty_multiplier in here too. Taken from (18.36) in Nocedal Wright
+
+        const std::vector<unsigned int> decision_variables = {SolutionBlocks::density,
+                                                              SolutionBlocks::displacement,
+                                                              SolutionBlocks::unfiltered_density};
         double hess_part = 0;
         double grad_part = 0;
-        double constraint_norm = 0;
-
-        const std::vector<unsigned int> decision_variables = {SolutionBlocks::density, SolutionBlocks::displacement, SolutionBlocks::unfiltered_density};
         for(const unsigned int decision_variable_i : decision_variables)
         {
             for(const unsigned int decision_variable_j : decision_variables)
@@ -1741,43 +1800,45 @@ namespace SAND {
             grad_part -= system_rhs.block(decision_variable_i)*step.block(decision_variable_i);
         }
 
-        const std::vector<unsigned int> equality_constraints = {SolutionBlocks::displacement_multiplier,
-                                                                SolutionBlocks::unfiltered_density_multiplier,
-                                                                SolutionBlocks::density_lower_slack_multiplier,
-                                                                SolutionBlocks::density_upper_slack_multiplier};
-        for(unsigned int i : equality_constraints)
-        {
-            constraint_norm =   constraint_norm + system_rhs.block(i).linfty_norm();
-        }
+        const std::vector<unsigned int> equality_constraint_multipliers = {SolutionBlocks::displacement_multiplier,
+                                                                           SolutionBlocks::unfiltered_density_multiplier,
+                                                                           SolutionBlocks::density_lower_slack_multiplier,
+                                                                           SolutionBlocks::density_upper_slack_multiplier};
+        double constraint_norm = 0;
+        for(unsigned int multiplier_i : equality_constraint_multipliers)
+          constraint_norm += system_rhs.block(multiplier_i).linfty_norm();
 
+
+        double test_penalty_multiplier;
         if (hess_part > 0)
             test_penalty_multiplier = (grad_part + .5 * hess_part)/(.05 * constraint_norm);
         else
             test_penalty_multiplier = (grad_part)/(.05 * constraint_norm);
         
-        if (test_penalty_multiplier > penalty_multiplier)
-        {
-            penalty_multiplier = test_penalty_multiplier;
-            std::cout << "penalty multiplier updated to " << penalty_multiplier << std::endl;
-        }
+        penalty_multiplier = std::max (penalty_multiplier, test_penalty_multiplier);
 
-        const auto max_step_sizes= calculate_max_step_size(state,step,barrier_size);
+        // Based on all of this, we can now compute step sizes for the
+        // primal and dual (Lagrange multiplier) variables. Once we
+        // have these, we scale the components of the solution vector,
+        // and that is what this function returns.
+        const std::pair<double,double> max_step_sizes = calculate_max_step_size(state, step, barrier_size);
         const double step_size_s = max_step_sizes.first;
         const double step_size_z = max_step_sizes.second;
-        BlockVector<double> max_step(9);
 
-        max_step.block(SolutionBlocks::density) = step_size_s * step.block(SolutionBlocks::density);
-        max_step.block(SolutionBlocks::displacement) = step_size_s * step.block(SolutionBlocks::displacement);
-        max_step.block(SolutionBlocks::unfiltered_density) = step_size_s * step.block(SolutionBlocks::unfiltered_density);
-        max_step.block(SolutionBlocks::displacement_multiplier) = step_size_z * step.block(SolutionBlocks::displacement_multiplier);
-        max_step.block(SolutionBlocks::unfiltered_density_multiplier) = step_size_z * step.block(SolutionBlocks::unfiltered_density_multiplier);
-        max_step.block(SolutionBlocks::density_lower_slack) = step_size_s * step.block(SolutionBlocks::density_lower_slack);
-        max_step.block(SolutionBlocks::density_lower_slack_multiplier) = step_size_z * step.block(SolutionBlocks::density_lower_slack_multiplier);
-        max_step.block(SolutionBlocks::density_upper_slack) = step_size_s * step.block(SolutionBlocks::density_upper_slack);
-        max_step.block(SolutionBlocks::density_upper_slack_multiplier) = step_size_z * step.block(SolutionBlocks::density_upper_slack_multiplier);
+        step.block(SolutionBlocks::density) *= step_size_s;
+        step.block(SolutionBlocks::displacement) *= step_size_s;
+        step.block(SolutionBlocks::unfiltered_density) *= step_size_s;
+        step.block(SolutionBlocks::displacement_multiplier) *= step_size_z;
+        step.block(SolutionBlocks::unfiltered_density_multiplier) *= step_size_z;
+        step.block(SolutionBlocks::density_lower_slack) *= step_size_s;
+        step.block(SolutionBlocks::density_lower_slack_multiplier) *= step_size_z;
+        step.block(SolutionBlocks::density_upper_slack) *= step_size_s;
+        step.block(SolutionBlocks::density_upper_slack_multiplier) *= step_size_z;
 
-        return max_step;
+        return step;
     }
+
+
 
     // This is my back-stepping algorithm for a line search - keeps shrinking step size until it finds a step where the merit is decreased.
 
@@ -1807,19 +1868,20 @@ namespace SAND {
     // Checks to see if the KKT conditions are sufficiently met to lower barrier size.
     template<int dim>
     bool
-    SANDTopOpt<dim>::check_convergence(const BlockVector<double> &state,  const double barrier_size)
+    SANDTopOpt<dim>::check_convergence(const BlockVector<double> &state,
+                                       const double barrier_size)
     {
-               const double convergence_condition = 1e-2;
-               const BlockVector<double> test_rhs = calculate_test_rhs(state,barrier_size);
-               std::cout << "current rhs norm is " << test_rhs.linfty_norm() << std::endl;
-               if (test_rhs.l1_norm()<convergence_condition * barrier_size)
-               {
-                   return true;
-               }
-               else
-               {
-                   return false;
-               }
+      const BlockVector<double> test_rhs = calculate_test_rhs(state,barrier_size);
+      const double test_rhs_norm = test_rhs.l1_norm();
+
+      const double convergence_condition = 1e-2;
+      const double target_norm = convergence_condition * barrier_size;
+
+      std::cout << "    Checking convergence. Current rhs norm is " << test_rhs_norm
+                << ", target is " << target_norm
+                << std::endl;
+
+      return (test_rhs_norm < target_norm);
     }
 
 
@@ -2058,10 +2120,24 @@ namespace SAND {
 
   // @sect3{The run() function driving the overall algorithm}
 
-    // Contains watchdog algorithm
+    // This function finally provides the overall driver logic. It is,
+    // in the grand scheme of things, a rather complicated function
+    // primarily because the optimization algorithm is difficult: It
+    // isn't just about finding a Newton direction like in step-15 and
+    // then going a fixed distance in this direction any more, but
+    // instead about (i) determining what the optimal log-barrier
+    // penalty parameter should be in the current step, (ii) a
+    // complicated algorithm to determine how far we want to go, and
+    // other ingredients. Let us see how we can break this down into
+    // smaller chunks in the following documentation.
+  //
+  // The function starts out simple enough with first setting up the
+  // mesh, the DoFHandler, and then the various linear algebra objects
+  // necessary for the following:
     template<int dim>
     void
-    SANDTopOpt<dim>::run() {
+    SANDTopOpt<dim>::run()
+    {
         {
           TimerOutput::Scope t(timer, "setup");
           
@@ -2074,144 +2150,224 @@ namespace SAND {
           setup_block_system();
           setup_filter_matrix();
         }
-        
+
+        // We then set a number of parameters that affect the
+        // log-barrier and line search components of the optimization
+        // algorithm:
         double barrier_size = 25;
         const double min_barrier_size = .0005;
         
         const unsigned int max_uphill_steps = 8;
-        unsigned int iteration_number = 0;
         const double descent_requirement = .0001;
-        //while barrier value above minimal value and total iterations under some value
-        BlockVector<double> current_state = nonlinear_solution;
-        BlockVector<double> current_step;
-        
 
-        while((barrier_size > .0005 || !check_convergence(current_state, barrier_size)) && iteration_number < 10000)
+
+        // Now start the principal iteration. The overall algorithm
+        // works by using an outer loop in which we loop until either
+        // (i) the log-barrier parameter has become small enough, (ii)
+        // we have reached convergence. In any case, we terminate if
+        // end up with too large a number of iterations. This overall
+        // structure is encoded as a `do { ... } while (...)` loop
+        // where the convergence condition is at the bottom.
+        unsigned int iteration_number = 0;
+        const unsigned int max_iterations = 10000;
+
+// TODO: It took me quite a while to realize the connection between
+// 'current_state' and 'nonlinear_solution'. You exclusively use the
+// former in this function, and exclusively the latter in the rest of
+// the program. So I started to look at where 'nonlinear_solution' is
+// even set, and found that you do that in 'find_max_step'. That's not
+// great design, for a variety of reasons. First, you set
+// 'nonlinear_solution' at the beginning of 'find_max_step', but that
+// means that 'nonlinear_solution' doesn't actually represent the last
+// computed value of 'current_state' -- if you use the found max step
+// to update 'current_solution', this is never reflected in
+// 'nonlinear_solution'. Second, a function called 'find_max_step' by
+// virtue of its name would be expected to *find* something, not to
+// change the state of the object it belongs to (namely, change the
+// value of 'nonlinear_solution'). I think it would be right for a
+// function with this name to be 'const', but you can't do this right
+// now because the function also updates other stuff. Regardless, I
+// think it would be quite useful to just not create the
+// 'current_state' vector at all and work with 'nonlinear_solution'
+// instead; I won't make that change, though, and leave that to you
+// since it changes the output of the program for the reason mentioned
+// above.
+        BlockVector<double> current_state = nonlinear_solution;
+        do
         {
-            bool converged = false;
-            //while not converged
-            while(!converged && iteration_number < 10000)
+          std::cout << "Starting outer step in iteration " << iteration_number
+                    << " with barrier parameter " << barrier_size << std::endl;
+
+          // Within this outer loop, we have an inner loop in which we
+          // try to find an update direction using the watchdog
+          // algorithm described in the introduction.
+          //
+          // The general idea of the watchdog algorithm itself is
+          // this: For a maximum of `max_uphill_steps` (i.e., a loop
+          // within the "inner loop" mentioned above) attempts, we use
+          // `find_max_step()` to compute a Newton update step, and
+          // add these up in the `current_state` vector.  In each of
+          // these attempts (starting from the place reached at the
+          // end of the previous attempt), we check whether we have
+          // reached a target value of the merit function described
+          // above. The target value is computed based on where this
+          // algorithm starts (the `current_state` at the beginning of
+          // the watchdog loop, saves as `watchdog_state`) and the
+          // first proposed direction provided by `find_max_step()` in
+          // the first go-around of this loop (the `k==0` case).
+          do
             {
-                bool found_step = false;
-                //save current state as watchdog state
+              std::cout << "  Starting inner step in iteration " << iteration_number
+                        << " with merit function penalty multiplier " << penalty_multiplier
+                        << std::endl;
+
+                bool watchdog_step_found = false;
 
                 const BlockVector<double> watchdog_state = current_state;
-                BlockVector<double> watchdog_step;
-                double goal_merit;
-                //for 1-8 steps - this is the number of steps away we will let it go uphill before demanding downhill
+                BlockVector<double> first_step;
+                double target_merit = numbers::signaling_nan<double>();
+                double merit_derivative = numbers::signaling_nan<double>();
+
                 for(unsigned int k = 0; k<max_uphill_steps; ++k)
                 {
-                    //compute step from current state  - function from kktSystem
-                    current_step = find_max_step(current_state, barrier_size);
-                    // save the first of these as the watchdog step
-                    if(k==0)
+                  ++iteration_number;
+                  const BlockVector<double> update_step
+                    = find_max_step(current_state, barrier_size);
+
+                  if (k==0)
                     {
-                        watchdog_step = current_step;
+                      first_step = update_step;
+                       merit_derivative = ((calculate_exact_merit(watchdog_state+.0001*first_step, barrier_size)
+                                                    - calculate_exact_merit(watchdog_state, barrier_size))/.0001);
+                       target_merit
+                         = calculate_exact_merit(watchdog_state, barrier_size) + descent_requirement * merit_derivative;
                     }
-                    //apply full step to current state
-                    current_state=current_state+current_step;
-                    //if merit of current state is less than goal
-                    double current_merit = calculate_exact_merit(current_state, barrier_size);
-                    std::cout << "current merit is: " <<current_merit << "  and  ";
-                    double merit_derivative = ((calculate_exact_merit(watchdog_state+.0001*watchdog_step,barrier_size) - calculate_exact_merit(watchdog_state,barrier_size ))/.0001);
-                    goal_merit = calculate_exact_merit(watchdog_state,barrier_size) + descent_requirement * merit_derivative;
-                    std::cout << "goal merit is "<<goal_merit <<std::endl;
-                    if(current_merit < goal_merit)
+
+                  current_state += update_step;
+                  const double current_merit = calculate_exact_merit(current_state, barrier_size);
+
+                  std::cout << "    current watchdog state merit is: " << current_merit
+                            << "; target merit is " << target_merit << std::endl;
+
+                  if (current_merit < target_merit)
                     {
-                        //Accept current state
-                        // iterate number of steps by number of steps taken in this process
-                        iteration_number = iteration_number + k + 1;
-                        //found step = true
-                        found_step = true;
-                        std::cout << "found workable step after " << k+1 << " iterations"<<std::endl;
-                        //break for loop
-                        break;
-                        //end if
+                      watchdog_step_found = true;
+                      std::cout << "    found workable step after " << k+1 << " iterations"<<std::endl;
+                      break;
                     }
-                    //end for
                 }
-                //if found step = false
-                if (!found_step)
+
+
+                // The next part of the algorithm then depends on
+                // whether the watchdog loop above succeeded. If it
+                // did, then we are satisfied and no further action is
+                // necessary: We just stay where we are. If, however,
+                // we took the maximal number of unsuccessful steps in
+                // the loop above, then we need to do something else,
+                // and this is what the following code block does.
+                //
+                // Specifically, from the final (unsuccessful) state
+                // of the loop above, we seek one more update
+                // direction and take what is called a "stretch
+                // step". If that stretch state satisfies a condition
+                // involving the merit function, then we go there. On
+                // the other hand, if the stretch state is also
+                // unacceptable (as all of the watchdog steps above
+                // were), then we discard all of the watchdog steps
+                // taken above and start over again where we had
+                // started the watchdog iterations -- that places was
+                // stored in the `watchdog_state` variable above. More
+                // specifically, the conditions below first test
+                // whether we take a step from `watchdog_state` in
+                // direction `first_step`, or whether we can do one
+                // more update from the stretch state to find a new
+                // place. It is possible that neither of these is
+                // actually better than the state we started from at
+                // the beginning of the watchdog algorithm, but even
+                // if that is so, that place clearly was a difficult
+                // place to be in, and getting away to start the next
+                // iteration from another place might be a useful
+                // strategy to eventually converge.
+                //
+                // We keep repeating the watchdog steps above along
+                // with the logic below until this inner iteration is
+                // finally converged (or if we run up against the
+                // maximal number of iterations -- where we count the
+                // number of linear solves as iterations and increment
+                // the counter every time we call `find_max_step()`
+                // since that is where the linear solve actually
+                // happens). In any case, at the end of each of these
+                // inner iterations we also output the solution in a
+                // form suitable for visualization.
+                if (watchdog_step_found == false)
                 {
-                    //Compute step from current state
-                    current_step = find_max_step(current_state,barrier_size);
-                    //find step length so that merit of stretch state - sized step from current length - is less than merit of (current state + descent requirement * linear derivative of merit of current state in direction of current step)
-                    //update stretch state with found step length
-                    const BlockVector<double> stretch_state = take_scaled_step(current_state, current_step, descent_requirement, barrier_size);
-                    //if current merit is less than watchdog merit, or if stretch merit is less than earlier goal merit
-                    if(calculate_exact_merit(current_state,barrier_size) < calculate_exact_merit(watchdog_state,barrier_size) || calculate_exact_merit(stretch_state,barrier_size) < goal_merit)
+                  ++iteration_number;
+                  const BlockVector<double> update_step = find_max_step(current_state,barrier_size);
+                    const BlockVector<double> stretch_state = take_scaled_step(current_state, update_step, descent_requirement, barrier_size);
+
+//TODO: in the first of the following conditions, did you mean to use
+//calculate_exact_merit(stretch_state, barrier_size) instead of
+//calculate_exact_merit(current_state, barrier_size)? I'm asking
+//because you go to your stretch state even if *current_state*
+//satisfies the first condition, regardless of what the stretch_state
+//you go to actually is.
+                    if((calculate_exact_merit(current_state, barrier_size) <
+                        calculate_exact_merit(watchdog_state, barrier_size))
+                       ||
+                       (calculate_exact_merit(stretch_state, barrier_size) < target_merit))
                     {
-                        std::cout << "Taking scaled step from end of Watchdog" << std::endl;
+                        std::cout << "    Taking scaled step from end of watchdog" << std::endl;
                         current_state = stretch_state;
-                        iteration_number = iteration_number + max_uphill_steps + 1;
                     }
                     else
                     {
-                        std::cout << "Taking scaled step from beginning of watchdog" << std::endl;
-                        //if merit of stretch state is bigger than watchdog merit
-                        if (calculate_exact_merit(stretch_state,barrier_size) > calculate_exact_merit(watchdog_state,barrier_size))
+                        std::cout << "    Taking scaled step from beginning of watchdog" << std::endl;
+                        if (calculate_exact_merit(stretch_state,barrier_size) >
+                            calculate_exact_merit(watchdog_state,barrier_size))
                         {
-                            //find step length from watchdog state that meets descent requirement
-                            current_state = take_scaled_step(watchdog_state, watchdog_step, descent_requirement, barrier_size);
-                            //update iteration count
-                            iteration_number = iteration_number +  max_uphill_steps + 1;
+                            current_state = take_scaled_step(watchdog_state, first_step, descent_requirement, barrier_size);
                         }
                         else
                         {
-                            //calculate direction from stretch state
+                          ++iteration_number;
                             const BlockVector<double> stretch_step = find_max_step(stretch_state,barrier_size);
-                            //find step length from stretch state that meets descent requirement
                             current_state = take_scaled_step(stretch_state, stretch_step, descent_requirement,barrier_size);
-                            //update iteration count
-                            iteration_number = iteration_number + max_uphill_steps + 2;
                         }
                     }
                 }
-                //output current state
+
                 output_results(iteration_number);
-                //check convergence
-                converged = check_convergence(current_state, barrier_size);
-                //end while
             }
-            const double barrier_size_multiplier = .7;
+            while ((iteration_number < max_iterations)
+                   &&
+                   (check_convergence(current_state, barrier_size) == false));
+
+
+            // At the end of the outer loop, we have to update the
+            // barrier parameter, for which we use the following
+            // formula. The rest of the function is then simply about
+            // checking the outer loop convergence condition, and if
+            // we decide to terminate computations, about writing the
+            // final "design" as an STL file for use in a 3d printer,
+            // and to output some timing information.
+            const double barrier_size_multiplier = .8;
             const double barrier_size_exponent = 1.2;
 
-            if (barrier_size * barrier_size_multiplier < std::pow(barrier_size, barrier_size_exponent))
-            {
-                if (barrier_size * barrier_size_multiplier < min_barrier_size)
-                {
-                    barrier_size = min_barrier_size;
-                }
-                else
-                {
-                    barrier_size = barrier_size * barrier_size_multiplier;
-                }
-            }
-            else
-            {
-                if (std::pow(barrier_size, barrier_size_exponent) < min_barrier_size)
-                {
-                    barrier_size = min_barrier_size;
-                }
-                else
-                {
-                    barrier_size = std::pow(barrier_size, barrier_size_exponent);
-                }
-            }
+            barrier_size = std::max (std::min(barrier_size * barrier_size_multiplier,
+                                              std::pow(barrier_size, barrier_size_exponent)),
+                                     min_barrier_size);
 
-
-
-//            barrier_size = barrier_size * barrier_size_multiplier;
-            std::cout << "barrier size reduced to " << barrier_size << " on iteration number " << iteration_number << std::endl;
-//
-//            penalty_multiplier = 1;
-            //end while
+            std::cout << std::endl;
         }
+        while(((barrier_size > .0005)
+               ||
+               (check_convergence(current_state, barrier_size) == false))
+              &&
+              (iteration_number < max_iterations));
 
         write_as_stl();
         timer.print_summary ();
     }
-
 } // namespace SAND
 
 
