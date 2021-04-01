@@ -24,6 +24,7 @@
 #include <deal.II/base/function.h>
 #include <deal.II/base/tensor.h>
 #include <deal.II/base/timer.h>
+#include <deal.II/base/signaling_nan.h>
 
 #include <deal.II/lac/block_vector.h>
 #include <deal.II/lac/full_matrix.h>
@@ -1753,7 +1754,8 @@ namespace SAND {
 
     template<int dim>
     BlockVector<double>
-    SANDTopOpt<dim>::find_max_step(const BlockVector<double> &state,const double barrier_size)
+    SANDTopOpt<dim>::find_max_step(const BlockVector<double> &state,
+                                   const double barrier_size)
     {
         nonlinear_solution = state;
         assemble_system(barrier_size);
@@ -1844,19 +1846,20 @@ namespace SAND {
     // Checks to see if the KKT conditions are sufficiently met to lower barrier size.
     template<int dim>
     bool
-    SANDTopOpt<dim>::check_convergence(const BlockVector<double> &state,  const double barrier_size)
+    SANDTopOpt<dim>::check_convergence(const BlockVector<double> &state,
+                                       const double barrier_size)
     {
-               const double convergence_condition = 1e-2;
-               const BlockVector<double> test_rhs = calculate_test_rhs(state,barrier_size);
-               std::cout << "    current rhs norm is " << test_rhs.linfty_norm() << std::endl;
-               if (test_rhs.l1_norm()<convergence_condition * barrier_size)
-               {
-                   return true;
-               }
-               else
-               {
-                   return false;
-               }
+      const BlockVector<double> test_rhs = calculate_test_rhs(state,barrier_size);
+      const double test_rhs_norm = test_rhs.l1_norm();
+      
+      const double convergence_condition = 1e-2;
+      const double target_norm = convergence_condition * barrier_size;
+      
+      std::cout << "    Checking convergence. Current rhs norm is " << test_rhs_norm
+                << ", target is " << target_norm
+                << std::endl;
+
+      return (test_rhs_norm < target_norm);
     }
 
 
@@ -2136,19 +2139,39 @@ namespace SAND {
         const double descent_requirement = .0001;
 
 
+        // Now start the principal iteration. The overall algorithm
+        // works by using an outer loop in which we loop until either
+        // (i) the log-barrier parameter has become small enough, (ii)
+        // we have reached convergence. In any case, we terminate if
+        // end up with too large a number of iterations. This overall
+        // structure is encoded as a `do { ... } while (...)` loop
+        // where the convergence condition is at the bottom.
         unsigned int iteration_number = 0;
+        const unsigned int max_iterations = 10000;
         BlockVector<double> current_state = nonlinear_solution;
-        while(((barrier_size > .0005)
-               ||
-               !check_convergence(current_state, barrier_size))
-              &&
-              (iteration_number < 10000))
+        do
         {
           std::cout << "Starting outer step in iteration " << iteration_number
                     << " with barrier parameter " << barrier_size << std::endl;
-          
-            bool converged = false;
-            while(!converged && iteration_number < 10000)
+
+          // Within this outer loop, we have an inner loop in which we
+          // try to find an update direction using the watchdog
+          // algorithm described in the introduction.
+          //
+          // The general idea of the watchdog algorithm itself is
+          // this: For a maximum of `max_uphill_steps` (i.e., a loop
+          // within the "inner loop" mentioned above) attempts, we use
+          // `find_max_step()` to compute a Newton update step, and
+          // add these up in the `current_state` vector.  In each of
+          // these attempts (starting from the place reached at the
+          // end of the previous attempt), we check whether we have
+          // reached a target value of the merit function described
+          // above. The target value is computed based on where this
+          // algorithm starts (the `current_state` at the beginning of
+          // the watchdog loop, saves as `watchdog_state`) and the
+          // first proposed direction provided by `find_max_step()` in
+          // the first go-around of this loop (the `k==0` case).
+          do
             {
               std::cout << "  Starting inner step in iteration " << iteration_number
                         << " with merit function penalty multiplier " << penalty_multiplier
@@ -2156,42 +2179,41 @@ namespace SAND {
               
                 bool found_step = false;
 
-                // save current state as watchdog state
                 const BlockVector<double> watchdog_state = current_state;
-                BlockVector<double> watchdog_step;
-                double goal_merit;
-                //for 1-8 steps - this is the number of steps away we will let it go uphill before demanding downhill
+                BlockVector<double> first_step;
+                double target_merit = numbers::signaling_nan<double>();
+                double merit_derivative = numbers::signaling_nan<double>();
+                
                 for(unsigned int k = 0; k<max_uphill_steps; ++k)
                 {
-                    //compute step from current state  - function from kktSystem
-                  const BlockVector<double> update_step = find_max_step(current_state, barrier_size);
-                    // save the first of these as the watchdog step
-                    if(k==0)
+                  ++iteration_number;
+                  const BlockVector<double> update_step
+                    = find_max_step(current_state, barrier_size);
+
+                  if (k==0)
                     {
-                        watchdog_step = update_step;
+                      first_step = update_step;
+                       merit_derivative = ((calculate_exact_merit(watchdog_state+.0001*first_step, barrier_size)
+                                                    - calculate_exact_merit(watchdog_state, barrier_size))/.0001);                  
+                       target_merit
+                         = calculate_exact_merit(watchdog_state, barrier_size) + descent_requirement * merit_derivative;
                     }
-                    //apply full step to current state
-                    current_state=current_state+update_step;
-                    //if merit of current state is less than goal
-                    double current_merit = calculate_exact_merit(current_state, barrier_size);
-                    std::cout << "    current merit is: " <<current_merit << "  and  ";
-                    double merit_derivative = ((calculate_exact_merit(watchdog_state+.0001*watchdog_step,barrier_size) - calculate_exact_merit(watchdog_state,barrier_size ))/.0001);
-                    goal_merit = calculate_exact_merit(watchdog_state,barrier_size) + descent_requirement * merit_derivative;
-                    std::cout << "    goal merit is "<<goal_merit <<std::endl;
-                    if(current_merit < goal_merit)
+                  
+                  current_state += update_step;
+                  const double current_merit = calculate_exact_merit(current_state, barrier_size);
+                  
+                  std::cout << "    current watchdog state merit is: " << current_merit
+                            << "; target merit is " << target_merit << std::endl;
+
+                  if (current_merit < target_merit)
                     {
-                        //Accept current state
-                        // iterate number of steps by number of steps taken in this process
-                        iteration_number = iteration_number + k + 1;
-                        //found step = true
-                        found_step = true;
-                        std::cout << "    found workable step after " << k+1 << " iterations"<<std::endl;
-                        //break for loop
-                        break;
-                        //end if
+                      found_step = true;
+                      std::cout << "    found workable step after " << k+1 << " iterations"<<std::endl;
+                      break;
                     }
-                    //end for
                 }
+
+                
                 if (found_step == false)
                 {
                     //Compute step from current state
@@ -2205,7 +2227,7 @@ namespace SAND {
                     const BlockVector<double> stretch_state = take_scaled_step(current_state, update_step, descent_requirement, barrier_size);
                     //if current merit is less than watchdog merit, or
                     //if stretch merit is less than earlier goal merit
-                    if(calculate_exact_merit(current_state,barrier_size) < calculate_exact_merit(watchdog_state,barrier_size) || calculate_exact_merit(stretch_state,barrier_size) < goal_merit)
+                    if(calculate_exact_merit(current_state,barrier_size) < calculate_exact_merit(watchdog_state,barrier_size) || calculate_exact_merit(stretch_state,barrier_size) < target_merit)
                     {
                         std::cout << "    Taking scaled step from end of watchdog" << std::endl;
                         current_state = stretch_state;
@@ -2218,7 +2240,7 @@ namespace SAND {
                         if (calculate_exact_merit(stretch_state,barrier_size) > calculate_exact_merit(watchdog_state,barrier_size))
                         {
                             //find step length from watchdog state that meets descent requirement
-                            current_state = take_scaled_step(watchdog_state, watchdog_step, descent_requirement, barrier_size);
+                            current_state = take_scaled_step(watchdog_state, first_step, descent_requirement, barrier_size);
                             //update iteration count
                             iteration_number = iteration_number +  max_uphill_steps + 1;
                         }
@@ -2235,17 +2257,20 @@ namespace SAND {
                 }
                 //output current state
                 output_results(iteration_number);
-                //check convergence
-                converged = check_convergence(current_state, barrier_size);
-                //end while
+
             }
+            while ((iteration_number < max_iterations)
+                   &&
+                   (check_convergence(current_state, barrier_size) == false));
 
 
             // At the end of the outer loop, we have to update the
             // barrier parameter, for which we use the following
             // formula. The rest of the function is then simply about
-            // writing the final "design" as an STL file for use in a
-            // 3d printer, and to output some timing information.
+            // checking the outer loop convergence condition, and if
+            // we decide to terminate computations, about writing the
+            // final "design" as an STL file for use in a 3d printer,
+            // and to output some timing information.
             const double barrier_size_multiplier = .8;
             const double barrier_size_exponent = 1.2;
 
@@ -2254,7 +2279,12 @@ namespace SAND {
                                      min_barrier_size);
 
             std::cout << std::endl;
-        } /* end of the outer while loop */
+        }
+        while(((barrier_size > .0005)
+               ||
+               (check_convergence(current_state, barrier_size) == false))
+              &&
+              (iteration_number < max_iterations));
 
         write_as_stl();
         timer.print_summary ();
