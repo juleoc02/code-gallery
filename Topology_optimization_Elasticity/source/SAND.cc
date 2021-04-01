@@ -1777,11 +1777,13 @@ namespace SAND {
         assemble_system();
         BlockVector<double> step = solve();
 
-        //Going to update penalty_multiplier in here too. Taken from (18.36) in Nocedal Wright
+        //Going to update penalty_multiplier in here too.
         //In essence, a larger penalty multiplier makes us consider the constraints more.
         //Looking at the hessian and gradient with respect to the step we want to take with our decision variables,
         // and comparing that to the norm of our constraint error gives us a way to ensure that our
         // merit function is "exact" - that is, it has a minimum in the same location that the objective function does.
+        // As our merit function is exact for any penalty multiplier over some minimum value,
+        // we only keep the computed value if it increases the penalty multiplier.
 
         const std::vector<unsigned int> decision_variables = {SolutionBlocks::density,
                                                               SolutionBlocks::displacement,
@@ -2299,12 +2301,15 @@ namespace SAND {
                 // happens). In any case, at the end of each of these
                 // inner iterations we also output the solution in a
                 // form suitable for visualization.
+
                 if (watchdog_step_found == false)
                 {
                   ++iteration_number;
                   const BlockVector<double> update_step = find_max_step();
                     const BlockVector<double> stretch_state = take_scaled_step(nonlinear_solution/*current_state*/, update_step, descent_requirement);
 
+                    //If we did not get a successful watchdog step, we now need to decide between going back to where we started, or using the final state.
+                    // We compare the merits of both of these locations, and then take a scaled step from whichever location is better.
                     if((calculate_exact_merit(nonlinear_solution/*current_state*/) <
                         calculate_exact_merit(watchdog_state))
                        ||
