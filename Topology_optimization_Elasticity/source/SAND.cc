@@ -2173,28 +2173,6 @@ namespace SAND {
         unsigned int iteration_number = 0;
         const unsigned int max_iterations = 10000;
 
-// TODO: It took me quite a while to realize the connection between
-// 'current_state' and 'nonlinear_solution'. You exclusively use the
-// former in this function, and exclusively the latter in the rest of
-// the program. So I started to look at where 'nonlinear_solution' is
-// even set, and found that you do that in 'find_max_step'. That's not
-// great design, for a variety of reasons. First, you set
-// 'nonlinear_solution' at the beginning of 'find_max_step', but that
-// means that 'nonlinear_solution' doesn't actually represent the last
-// computed value of 'current_state' -- if you use the found max step
-// to update 'current_solution', this is never reflected in
-// 'nonlinear_solution'. Second, a function called 'find_max_step' by
-// virtue of its name would be expected to *find* something, not to
-// change the state of the object it belongs to (namely, change the
-// value of 'nonlinear_solution'). I think it would be right for a
-// function with this name to be 'const', but you can't do this right
-// now because the function also updates other stuff. Regardless, I
-// think it would be quite useful to just not create the
-// 'current_state' vector at all and work with 'nonlinear_solution'
-// instead; I won't make that change, though, and leave that to you
-// since it changes the output of the program for the reason mentioned
-// above.
-        BlockVector<double> current_state = nonlinear_solution;
         do
         {
           std::cout << "Starting outer step in iteration " << iteration_number
@@ -2208,12 +2186,12 @@ namespace SAND {
           // this: For a maximum of `max_uphill_steps` (i.e., a loop
           // within the "inner loop" mentioned above) attempts, we use
           // `find_max_step()` to compute a Newton update step, and
-          // add these up in the `current_state` vector.  In each of
+          // add these up in the `nonlinear_solution` vector.  In each of
           // these attempts (starting from the place reached at the
           // end of the previous attempt), we check whether we have
           // reached a target value of the merit function described
           // above. The target value is computed based on where this
-          // algorithm starts (the `current_state` at the beginning of
+          // algorithm starts (the `nonlinear_solution` at the beginning of
           // the watchdog loop, saves as `watchdog_state`) and the
           // first proposed direction provided by `find_max_step()` in
           // the first go-around of this loop (the `k==0` case).
@@ -2225,7 +2203,7 @@ namespace SAND {
 
                 bool watchdog_step_found = false;
 
-                const BlockVector<double> watchdog_state = current_state;
+                const BlockVector<double> watchdog_state = nonlinear_solution;
                 BlockVector<double> first_step;
                 double target_merit = numbers::signaling_nan<double>();
                 double merit_derivative = numbers::signaling_nan<double>();
@@ -2245,8 +2223,8 @@ namespace SAND {
                          = calculate_exact_merit(watchdog_state) + descent_requirement * merit_derivative;
                     }
 
-                  nonlinear_solution/*current_state*/ += update_step;
-                  const double current_merit = calculate_exact_merit(nonlinear_solution/*current_state*/);
+                  nonlinear_solution += update_step;
+                  const double current_merit = calculate_exact_merit(nonlinear_solution);
 
                   std::cout << "    current watchdog state merit is: " << current_merit
                             << "; target merit is " << target_merit << std::endl;
@@ -2306,17 +2284,18 @@ namespace SAND {
                 {
                   ++iteration_number;
                   const BlockVector<double> update_step = find_max_step();
-                    const BlockVector<double> stretch_state = take_scaled_step(nonlinear_solution/*current_state*/, update_step, descent_requirement);
+                    const BlockVector<double> stretch_state = take_scaled_step(nonlinear_solution, update_step, descent_requirement);
 
                     //If we did not get a successful watchdog step, we now need to decide between going back to where we started, or using the final state.
                     // We compare the merits of both of these locations, and then take a scaled step from whichever location is better.
-                    if((calculate_exact_merit(nonlinear_solution/*current_state*/) <
+                    // As the scaled step is guaranteed to lower the merit, we will end up keeping either the
+                    if((calculate_exact_merit(nonlinear_solution) <
                         calculate_exact_merit(watchdog_state))
                        ||
                        (calculate_exact_merit(stretch_state) < target_merit))
                     {
                         std::cout << "    Taking scaled step from end of watchdog" << std::endl;
-                        nonlinear_solution/*current_state*/ = stretch_state;
+                        nonlinear_solution = stretch_state;
                     }
                     else
                     {
@@ -2324,14 +2303,14 @@ namespace SAND {
                         if (calculate_exact_merit(stretch_state) >
                             calculate_exact_merit(watchdog_state))
                         {
-                            nonlinear_solution/*current_state*/ = take_scaled_step(watchdog_state, first_step, descent_requirement);
+                            nonlinear_solution = take_scaled_step(watchdog_state, first_step, descent_requirement);
                         }
                         else
                         {
                           ++iteration_number;
                           nonlinear_solution = stretch_state;
                             const BlockVector<double> stretch_step = find_max_step();
-                            nonlinear_solution/*current_state*/ = take_scaled_step(current_state, stretch_step, descent_requirement);
+                            nonlinear_solution = take_scaled_step(nonlinear_solution, stretch_step, descent_requirement);
                         }
                     }
                 }
@@ -2340,7 +2319,7 @@ namespace SAND {
             }
             while ((iteration_number < max_iterations)
                    &&
-                   (check_convergence(nonlinear_solution/*current_state*/) == false));
+                   (check_convergence(nonlinear_solution) == false));
 
 
             // At the end of the outer loop, we have to update the
@@ -2361,7 +2340,7 @@ namespace SAND {
         }
         while(((barrier_size > .0005)
                ||
-               (check_convergence(nonlinear_solution/*current_state*/) == false))
+               (check_convergence(nonlinear_solution) == false))
               &&
               (iteration_number < max_iterations));
 
