@@ -178,7 +178,7 @@ namespace SAND {
     find_max_step();
 
     BlockVector<double>
-    take_scaled_step(const BlockVector<double> &state, const BlockVector<double> &step, const double descent_requirement);
+    compute_scaled_step(const BlockVector<double> &state, const BlockVector<double> &step, const double descent_requirement);
 
     bool
     check_convergence(const BlockVector<double> &state);
@@ -1849,34 +1849,37 @@ namespace SAND {
 
 
 
-  // This is my back-stepping algorithm for a line search - keeps
-  // shrinking step size until it finds a step where the merit is
-  // decreased.
+  // @sect4{Computing a scaled step}
 
+  // The next function then implements a back-tracking algorithm for a
+  // line search. It keeps shrinking step size until it finds a step
+  // where the merit is decreased, and then returns the new location
+  // based on the current state vector, and the direction to go into,
+  // times the step length.
   template<int dim>
   BlockVector<double>
-  SANDTopOpt<dim>::take_scaled_step(const BlockVector<double> &state, const BlockVector<double> &max_step, const double descent_requirement)
+  SANDTopOpt<dim>::compute_scaled_step(const BlockVector<double> &state, const BlockVector<double> &max_step, const double descent_requirement)
   {
     double step_size = 1;
     for(unsigned int k = 0; k<10; ++k)
       {
         const double merit_derivative = (calculate_exact_merit(state + .0001 * max_step) - calculate_exact_merit(state))/.0001;
         if(calculate_exact_merit(state + step_size * max_step) <calculate_exact_merit(state) + step_size * descent_requirement * merit_derivative )
-          {
-            break;
-          }
+          break;
         else
-          {
-            step_size = step_size/2;
-          }
+          step_size = step_size/2;
       }
     return state + (step_size * max_step);
-
   }
 
 
+  // @sect4{Checking for convergence}
 
-  // Checks to see if the KKT conditions are sufficiently met to lower barrier size.
+  // The final auxiliary function in this block is the one that checks
+  // to see if the KKT conditions are sufficiently met so that the
+  // overall algorithm can lower the barrier size. It does so by
+  // computing the $l_1$ norm of the residual, which is what
+  // `calculate_test_rhs()` computes.
   template<int dim>
   bool
   SANDTopOpt<dim>::check_convergence(const BlockVector<double> &state)
@@ -2292,7 +2295,7 @@ namespace SAND {
               {
                 ++iteration_number;
                 const BlockVector<double> update_step = find_max_step();
-                const BlockVector<double> stretch_state = take_scaled_step(nonlinear_solution, update_step, descent_requirement);
+                const BlockVector<double> stretch_state = compute_scaled_step(nonlinear_solution, update_step, descent_requirement);
 
                 // If we did not get a successful watchdog step,
                 // we now need to decide between going back to
@@ -2316,14 +2319,14 @@ namespace SAND {
                     if (calculate_exact_merit(stretch_state) >
                         calculate_exact_merit(watchdog_state))
                       {
-                        nonlinear_solution = take_scaled_step(watchdog_state, first_step, descent_requirement);
+                        nonlinear_solution = compute_scaled_step(watchdog_state, first_step, descent_requirement);
                       }
                     else
                       {
                         ++iteration_number;
                         nonlinear_solution = stretch_state;
                         const BlockVector<double> stretch_step = find_max_step();
-                        nonlinear_solution = take_scaled_step(nonlinear_solution, stretch_step, descent_requirement);
+                        nonlinear_solution = compute_scaled_step(nonlinear_solution, stretch_step, descent_requirement);
                       }
                   }
               }
