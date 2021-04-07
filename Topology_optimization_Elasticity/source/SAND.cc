@@ -247,7 +247,7 @@ namespace SAND {
             dof_handler(triangulation),
             density_ratio (.5),
             density_penalty_exponent (3),
-            filter_r (.251),
+            filter_r (.250001),
             penalty_multiplier (1),
             timer(std::cout,
                   TimerOutput::summary,
@@ -2327,7 +2327,7 @@ namespace SAND {
             // formula. The rest of the function is then simply about
             // checking the outer loop convergence condition, and if
             // we decide to terminate computations, about writing the
-            // final "design" as an STL file for use in a 3d printer,
+            // final "design" as an STL file for use in 3d printing,
             // and to output some timing information.
             const double barrier_size_multiplier = .8;
             const double barrier_size_exponent = 1.2;
@@ -2335,10 +2335,8 @@ namespace SAND {
             barrier_size = std::max (std::min(barrier_size * barrier_size_multiplier,
                                               std::pow(barrier_size, barrier_size_exponent)),
                                      min_barrier_size);
-
-            std::cout << std::endl;
         }
-        while(((barrier_size > .0005)
+        while(((barrier_size > min_barrier_size)
                ||
                (check_convergence(nonlinear_solution) == false))
               &&
