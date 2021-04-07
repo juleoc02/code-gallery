@@ -1767,8 +1767,10 @@ namespace SAND {
   // calls the functions that assemble the linear system that
   // corresponds to the Newton system, and that solve it.
 
-    // This updates the penalty multiplier in the merit function, and then returns the largest scaled feasible step
-    // Uses the "calculate_max_step_sizes" function to find the largest feasible step - s>0 and z>0
+    // This function also updates the penalty multiplier in the merit
+    // function, and then returns the largest scaled feasible step.
+    // It uses the `calculate_max_step_sizes()` function to find the
+    // largest feasible step that satisfies $s>0$ and $z>0$.
 
     template<int dim>
     BlockVector<double>
@@ -1777,13 +1779,17 @@ namespace SAND {
         assemble_system();
         BlockVector<double> step = solve();
 
-        //Going to update penalty_multiplier in here too.
-        //In essence, a larger penalty multiplier makes us consider the constraints more.
-        //Looking at the hessian and gradient with respect to the step we want to take with our decision variables,
-        // and comparing that to the norm of our constraint error gives us a way to ensure that our
-        // merit function is "exact" - that is, it has a minimum in the same location that the objective function does.
-        // As our merit function is exact for any penalty multiplier over some minimum value,
-        // we only keep the computed value if it increases the penalty multiplier.
+        // Next we are going to update penalty_multiplier.  In
+        // essence, a larger penalty multiplier makes us consider the
+        // constraints more.  Looking at the Hessian and gradient with
+        // respect to the step we want to take with our decision
+        // variables, and comparing that to the norm of our constraint
+        // error gives us a way to ensure that our merit function is
+        // "exact" - that is, it has a minimum in the same location
+        // that the objective function does.  As our merit function is
+        // exact for any penalty multiplier over some minimum value,
+        // we only keep the computed value if it increases the penalty
+        // multiplier.
 
         const std::vector<unsigned int> decision_variables = {SolutionBlocks::density,
                                                               SolutionBlocks::displacement,
@@ -1847,7 +1853,7 @@ namespace SAND {
 
     template<int dim>
     BlockVector<double>
-    SANDTopOpt<dim>::take_scaled_step(const BlockVector<double> &state,const BlockVector<double> &max_step,const double descent_requirement)
+    SANDTopOpt<dim>::take_scaled_step(const BlockVector<double> &state, const BlockVector<double> &max_step, const double descent_requirement)
     {
         double step_size = 1;
             for(unsigned int k = 0; k<10; ++k)
@@ -2286,9 +2292,14 @@ namespace SAND {
                   const BlockVector<double> update_step = find_max_step();
                     const BlockVector<double> stretch_state = take_scaled_step(nonlinear_solution, update_step, descent_requirement);
 
-                    //If we did not get a successful watchdog step, we now need to decide between going back to where we started, or using the final state.
-                    // We compare the merits of both of these locations, and then take a scaled step from whichever location is better.
-                    // As the scaled step is guaranteed to lower the merit, we will end up keeping either the
+                    // If we did not get a successful watchdog step,
+                    // we now need to decide between going back to
+                    // where we started, or using the final state.  We
+                    // compare the merits of both of these locations,
+                    // and then take a scaled step from whichever
+                    // location is better.  As the scaled step is
+                    // guaranteed to lower the merit, we will end up
+                    // keeping one of the two.
                     if((calculate_exact_merit(nonlinear_solution) <
                         calculate_exact_merit(watchdog_state))
                        ||
